@@ -281,6 +281,70 @@
             font-weight: 500;
         }
 
+        .schedule-toggle {
+            background: none;
+            border: none;
+            color: #4ecca3;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 0;
+            margin-left: 8px;
+        }
+
+        .schedule-toggle:hover { text-decoration: underline; }
+
+        .schedule-panel {
+            margin-top: 12px;
+            border-top: 1px solid #0f3460;
+            padding-top: 12px;
+        }
+
+        .schedule-day {
+            margin-bottom: 8px;
+        }
+
+        .schedule-day-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        .schedule-events {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .schedule-event {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            gap: 6px;
+        }
+
+        .schedule-event .ev-type {
+            color: #888;
+            min-width: 48px;
+        }
+
+        .schedule-event .ev-time {
+            color: #4ecca3;
+            font-family: monospace;
+        }
+
+        .schedule-event .ev-temp {
+            color: #e94560;
+            font-family: monospace;
+        }
+
+        .schedule-event.inactive {
+            opacity: 0.35;
+        }
+
         .toast {
             position: fixed;
             bottom: 24px;
@@ -356,6 +420,8 @@
         let pendingTargets = {};
         let refreshTimer = null;
         let debounceTimers = {};
+        let scheduleCache = {};
+        let scheduleVisible = {};
 
         const AUTO_REFRESH_MS = 30000;
         const DEBOUNCE_MS = 2000;
@@ -473,6 +539,63 @@
             if (btn) btn.disabled = false;
         }
 
+        async function toggleSchedule(serial) {
+            if (scheduleVisible[serial]) {
+                scheduleVisible[serial] = false;
+                render();
+                return;
+            }
+            // Fetch schedule if not cached
+            if (!scheduleCache[serial]) {
+                try {
+                    const resp = await fetch(`/api/thermostats/${serial}/schedule`);
+                    if (!resp.ok) throw new Error("Failed");
+                    const data = await resp.json();
+                    scheduleCache[serial] = data.schedule;
+                } catch (e) {
+                    showToast("Failed to load schedule", "error");
+                    return;
+                }
+            }
+            scheduleVisible[serial] = true;
+            render();
+        }
+
+        function formatTime12(clock) {
+            if (!clock) return "";
+            const parts = clock.split(":");
+            let h = parseInt(parts[0]);
+            const m = parts[1];
+            const ampm = h >= 12 ? "PM" : "AM";
+            if (h === 0) h = 12;
+            else if (h > 12) h -= 12;
+            return h + ":" + m + " " + ampm;
+        }
+
+        function renderSchedulePanel(serial) {
+            const schedule = scheduleCache[serial];
+            if (!schedule || !scheduleVisible[serial]) return "";
+
+            let html = '<div class="schedule-panel">';
+            for (const day of schedule) {
+                html += '<div class="schedule-day">';
+                html += '<div class="schedule-day-name">' + day.day + '</div>';
+                html += '<div class="schedule-events">';
+                for (const ev of day.events) {
+                    const cls = ev.active ? "schedule-event" : "schedule-event inactive";
+                    const temp = useFahrenheit ? ev.temperature_f + "°F" : ev.temperature_c + "°C";
+                    html += '<div class="' + cls + '">' +
+                        '<span class="ev-type">' + ev.type + '</span>' +
+                        '<span class="ev-time">' + formatTime12(ev.time) + '</span>' +
+                        '<span class="ev-temp">' + temp + '</span>' +
+                        '</div>';
+                }
+                html += '</div></div>';
+            }
+            html += '</div>';
+            return html;
+        }
+
         function render() {
             if (thermostats.length === 0) {
                 document.getElementById("content").innerHTML =
@@ -524,6 +647,9 @@
                         <div class="schedule-info">
                             Mode: <span class="mode">${t.schedule_mode_name}</span>
                             ${t.hold_until ? " &middot; Until " + new Date(t.hold_until).toLocaleString() : ""}
+                            <button class="schedule-toggle" onclick="toggleSchedule('${serial}')">
+                                ${scheduleVisible[serial] ? "Hide Schedule" : "Show Schedule"}
+                            </button>
                         </div>
 
                         <div class="card-actions">
@@ -531,6 +657,8 @@
                                 Resume Schedule
                             </button>
                         </div>
+
+                        ${renderSchedulePanel(serial)}
                     </div>
                 `;
             }).join("") + '</div>';

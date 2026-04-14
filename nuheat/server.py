@@ -498,6 +498,21 @@ async def get_thermostat(serial_number: str):
     return _thermostat_response(thermostat)
 
 
+@app.get("/api/thermostats/{serial_number}/schedule")
+async def get_schedule(serial_number: str):
+    """Get the weekly schedule for a thermostat."""
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+    thermostat = manager.get_cached(serial_number)
+    if not thermostat:
+        raise HTTPException(status_code=404, detail=f"Thermostat {serial_number} not found")
+    return {
+        "serial_number": serial_number,
+        "name": thermostat.name,
+        "schedule": thermostat.get_schedule(),
+    }
+
+
 # --- Write Endpoints (hit NuHeat, throttled) ---
 
 @app.put("/api/thermostats/{serial_number}/temperature", response_model=MessageResponse)
@@ -643,3 +658,20 @@ async def qs_resume(
         raise HTTPException(status_code=500, detail="Failed to resume schedule")
 
     return {"success": True, "message": "Schedule resumed", "serial": serial}
+
+
+@app.get("/qs/schedule")
+async def qs_schedule(
+    serial: str = Query(..., description="Thermostat serial number"),
+):
+    """Get weekly schedule via query string."""
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+    thermostat = manager.get_cached(serial)
+    if not thermostat:
+        raise HTTPException(status_code=404, detail=f"Thermostat {serial} not found")
+    return {
+        "serial_number": serial,
+        "name": thermostat.name,
+        "schedule": thermostat.get_schedule(),
+    }

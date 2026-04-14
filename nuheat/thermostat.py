@@ -3,7 +3,10 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from nuheat.config import celsius_to_fahrenheit
+from nuheat.config import celsius_to_fahrenheit, nuheat_to_celsius, nuheat_to_fahrenheit
+
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+EVENT_NAMES = {0: "Morning", 1: "Leave", 2: "Return", 3: "Sleep"}
 
 
 @dataclass
@@ -53,3 +56,24 @@ class Thermostat:
             "hold_until": self.hold_until,
             "firmware": self.firmware,
         }
+
+    def get_schedule(self) -> list[dict[str, Any]]:
+        """Return the weekly schedule with converted temperatures.
+
+        Returns a list of 7 days (Monday-Sunday), each with their events.
+        """
+        result = []
+        for i, day_data in enumerate(self.schedules):
+            day_name = DAY_NAMES[i] if i < len(DAY_NAMES) else f"Day {i}"
+            events = []
+            for event in day_data.get("Events", []):
+                nuheat_temp = event.get("TempFloor", 0)
+                events.append({
+                    "type": EVENT_NAMES.get(event.get("ScheduleType", -1), "Unknown"),
+                    "time": event.get("Clock", ""),
+                    "temperature_c": round(nuheat_to_celsius(nuheat_temp), 1),
+                    "temperature_f": round(nuheat_to_fahrenheit(nuheat_temp), 1),
+                    "active": event.get("Active", False),
+                })
+            result.append({"day": day_name, "events": events})
+        return result
