@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NuHeat API Reference</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #16213e;
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        header h1 {
+            font-size: 22px;
+            font-weight: 600;
+            color: #e94560;
+        }
+
+        .header-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .header-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .header-links a:hover { text-decoration: underline; }
+
+        .content {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        .intro {
+            margin-bottom: 32px;
+            line-height: 1.6;
+            color: #aaa;
+        }
+
+        .intro a { color: #4ecca3; text-decoration: none; }
+        .intro a:hover { text-decoration: underline; }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .endpoint {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+
+        .endpoint-header {
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .method {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .method.get { background: #4ecca31a; color: #4ecca3; border: 1px solid #4ecca340; }
+        .method.put { background: #e9a0451a; color: #e9a045; border: 1px solid #e9a04540; }
+        .method.post { background: #4590e91a; color: #4590e9; border: 1px solid #4590e940; }
+
+        .endpoint-path {
+            font-family: monospace;
+            font-size: 15px;
+            color: #fff;
+        }
+
+        .endpoint-desc {
+            padding: 0 20px 16px;
+            color: #aaa;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .endpoint-details {
+            padding: 0 20px 16px;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+            margin-top: 12px;
+        }
+
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .params-table th {
+            text-align: left;
+            color: #888;
+            font-weight: 600;
+            padding: 6px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .params-table td {
+            padding: 6px 0;
+            border-bottom: 1px solid #0f346040;
+        }
+
+        .params-table td:first-child {
+            font-family: monospace;
+            color: #e94560;
+        }
+
+        .params-table td:nth-child(2) {
+            color: #888;
+            padding-left: 12px;
+        }
+
+        .params-table td:nth-child(3) {
+            padding-left: 12px;
+        }
+
+        .example {
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #4ecca3;
+            overflow-x: auto;
+            margin-top: 8px;
+            line-height: 1.6;
+        }
+
+        .example .comment { color: #555; }
+
+        .required {
+            color: #e94560;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .optional {
+            color: #555;
+            font-size: 11px;
+        }
+
+        @media (max-width: 480px) {
+            .content { padding: 20px 16px; }
+            .endpoint-header { flex-wrap: wrap; }
+            header h1 { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>NuHeat API Reference</h1>
+        <div class="header-links">
+            <a href="/">Dashboard</a>
+            <a href="/docs">Interactive Docs</a>
+        </div>
+    </header>
+
+    <div class="content">
+        <div class="intro">
+            Control your NuHeat floor heating thermostats from any system on your network.
+            Three interfaces are available: a <strong>REST API</strong> with JSON bodies,
+            a <strong>Query String API</strong> using simple GET requests, and a
+            <strong>Health</strong> endpoint for monitoring.
+            For interactive testing, use the <a href="/docs">Swagger UI</a>.
+        </div>
+
+        <!-- REST API -->
+        <div class="section">
+            <h2>REST API</h2>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method get">GET</span>
+                    <span class="endpoint-path">/api/thermostats</span>
+                </div>
+                <div class="endpoint-desc">List all thermostats with current status.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Example</div>
+                    <div class="example">curl http://localhost:8777/api/thermostats</div>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method get">GET</span>
+                    <span class="endpoint-path">/api/thermostats/{serial_number}</span>
+                </div>
+                <div class="endpoint-desc">Get a single thermostat's current status.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Path Parameters</div>
+                    <table class="params-table">
+                        <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+                        <tr><td>serial_number</td><td>string <span class="required">required</span></td><td>Thermostat serial number</td></tr>
+                    </table>
+                    <div class="detail-label">Example</div>
+                    <div class="example">curl http://localhost:8777/api/thermostats/ABC123</div>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method put">PUT</span>
+                    <span class="endpoint-path">/api/thermostats/{serial_number}/temperature</span>
+                </div>
+                <div class="endpoint-desc">
+                    Set the target temperature. Provide temperature_c or temperature_f.
+                    Omit hold_until for a permanent hold, or provide an ISO datetime for a temporary hold.
+                </div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Path Parameters</div>
+                    <table class="params-table">
+                        <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+                        <tr><td>serial_number</td><td>string <span class="required">required</span></td><td>Thermostat serial number</td></tr>
+                    </table>
+                    <div class="detail-label">JSON Body</div>
+                    <table class="params-table">
+                        <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+                        <tr><td>temperature_c</td><td>float <span class="optional">optional</span></td><td>Target temperature in Celsius</td></tr>
+                        <tr><td>temperature_f</td><td>float <span class="optional">optional</span></td><td>Target temperature in Fahrenheit</td></tr>
+                        <tr><td>hold_until</td><td>string <span class="optional">optional</span></td><td>ISO datetime for temporary hold</td></tr>
+                    </table>
+                    <div class="detail-label">Examples</div>
+                    <div class="example">
+                        <span class="comment"># Set to 72°F with permanent hold</span><br>
+                        curl -X PUT http://localhost:8777/api/thermostats/ABC123/temperature \<br>
+                        &nbsp;&nbsp;-H "Content-Type: application/json" \<br>
+                        &nbsp;&nbsp;-d '{"temperature_f": 72}'<br>
+                        <br>
+                        <span class="comment"># Set to 25°C until a specific time</span><br>
+                        curl -X PUT http://localhost:8777/api/thermostats/ABC123/temperature \<br>
+                        &nbsp;&nbsp;-H "Content-Type: application/json" \<br>
+                        &nbsp;&nbsp;-d '{"temperature_c": 25, "hold_until": "2025-12-01T08:00:00"}'
+                    </div>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method post">POST</span>
+                    <span class="endpoint-path">/api/thermostats/{serial_number}/resume</span>
+                </div>
+                <div class="endpoint-desc">Resume the programmed schedule for a thermostat.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Example</div>
+                    <div class="example">curl -X POST http://localhost:8777/api/thermostats/ABC123/resume</div>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method get">GET</span>
+                    <span class="endpoint-path">/api/health</span>
+                </div>
+                <div class="endpoint-desc">Health check. Returns server status and number of cached thermostats.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Example</div>
+                    <div class="example">curl http://localhost:8777/api/health</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Query String API -->
+        <div class="section">
+            <h2>Query String API</h2>
+            <div class="intro" style="margin-bottom:16px">
+                Simple GET-only endpoints for systems that can't send JSON bodies &mdash;
+                webhooks, browser bookmarks, curl one-liners, IoT devices.
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method get">GET</span>
+                    <span class="endpoint-path">/qs/status</span>
+                </div>
+                <div class="endpoint-desc">Get thermostat status. Omit serial for all thermostats.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Query Parameters</div>
+                    <table class="params-table">
+                        <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+                        <tr><td>serial</td><td>string <span class="optional">optional</span></td><td>Thermostat serial number (omit for all)</td></tr>
+                    </table>
+                    <div class="detail-label">Examples</div>
+                    <div class="example">
+                        <span class="comment"># All thermostats</span><br>
+                        curl http://localhost:8777/qs/status<br>
+                        <br>
+                        <span class="comment"># Single thermostat</span><br>
+                        curl http://localhost:8777/qs/status?serial=ABC123
+                    </div>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method get">GET</span>
+                    <span class="endpoint-path">/qs/set</span>
+                </div>
+                <div class="endpoint-desc">Set thermostat temperature. Provide temp_c or temp_f.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Query Parameters</div>
+                    <table class="params-table">
+                        <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+                        <tr><td>serial</td><td>string <span class="required">required</span></td><td>Thermostat serial number</td></tr>
+                        <tr><td>temp_c</td><td>float <span class="optional">optional</span></td><td>Target temperature in Celsius</td></tr>
+                        <tr><td>temp_f</td><td>float <span class="optional">optional</span></td><td>Target temperature in Fahrenheit</td></tr>
+                        <tr><td>hold_until</td><td>string <span class="optional">optional</span></td><td>ISO datetime for temporary hold</td></tr>
+                    </table>
+                    <div class="detail-label">Examples</div>
+                    <div class="example">
+                        <span class="comment"># Set to 72°F</span><br>
+                        curl "http://localhost:8777/qs/set?serial=ABC123&amp;temp_f=72"<br>
+                        <br>
+                        <span class="comment"># Set to 25°C with temporary hold</span><br>
+                        curl "http://localhost:8777/qs/set?serial=ABC123&amp;temp_c=25&amp;hold_until=2025-12-01T08:00:00"
+                    </div>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method get">GET</span>
+                    <span class="endpoint-path">/qs/resume</span>
+                </div>
+                <div class="endpoint-desc">Resume the programmed schedule.</div>
+                <div class="endpoint-details">
+                    <div class="detail-label">Query Parameters</div>
+                    <table class="params-table">
+                        <tr><th>Name</th><th>Type</th><th>Description</th></tr>
+                        <tr><td>serial</td><td>string <span class="required">required</span></td><td>Thermostat serial number</td></tr>
+                    </table>
+                    <div class="detail-label">Example</div>
+                    <div class="example">curl "http://localhost:8777/qs/resume?serial=ABC123"</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

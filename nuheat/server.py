@@ -90,6 +90,12 @@ async def dashboard():
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/api-reference", include_in_schema=False)
+async def api_reference():
+    """Serve the API reference page."""
+    return FileResponse(STATIC_DIR / "api.html")
+
+
 # --- Request/Response Models ---
 
 class SetTemperatureRequest(BaseModel):
