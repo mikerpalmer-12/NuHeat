@@ -19,6 +19,7 @@ from nuheat.api.legacy import LegacyAPI
 from nuheat.api.oauth2 import OAuth2API
 from nuheat.config import DEFAULT_POLL_INTERVAL_SECONDS, ScheduleMode
 from nuheat.manager import ThermostatManager
+from nuheat.persistent_config import persistent_config
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +32,18 @@ _flush_task: asyncio.Task | None = None
 
 
 class Settings:
-    """Mutable runtime settings."""
+    """Mutable runtime settings. Persistent config overrides .env defaults."""
 
     def __init__(self):
-        self.poll_interval = int(os.environ.get("NUHEAT_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS))
-        self.rate_limit_reads = int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))
-        self.rate_limit_writes = int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))
-        self.write_throttle = int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
-        self.debug_mode = activity_log.debug_mode
-        self.api_logging = False
+        pc = persistent_config
+        self.poll_interval = pc.get("poll_interval") or int(os.environ.get("NUHEAT_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS))
+        self.rate_limit_reads = pc.get("rate_limit_reads") or int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))
+        self.rate_limit_writes = pc.get("rate_limit_writes") or int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))
+        self.write_throttle = pc.get("write_throttle") if pc.get("write_throttle") is not None else int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
+        self.debug_mode = pc.get("debug_mode") if pc.get("debug_mode") is not None else activity_log.debug_mode
+        self.api_logging = pc.get("api_logging", False)
+        # Apply debug mode from persisted config
+        activity_log.debug_mode = self.debug_mode
 
     def to_dict(self) -> dict:
         return {
@@ -103,7 +107,8 @@ def _is_write_path(path: str) -> bool:
 # --- Manager Setup ---
 
 def create_manager() -> ThermostatManager:
-    """Create the appropriate API client based on environment config."""
+    """Create the appropriate API client. Persistent config overrides .env."""
+    pc = persistent_config
     api_type = os.environ.get("NUHEAT_API_TYPE", "legacy").lower()
 
     if api_type == "oauth2":
@@ -114,14 +119,18 @@ def create_manager() -> ThermostatManager:
             raise ValueError("NUHEAT_CLIENT_ID and NUHEAT_CLIENT_SECRET are required for OAuth2")
         api = OAuth2API(client_id, client_secret, redirect_uri)
     else:
-        email = os.environ.get("NUHEAT_EMAIL", "")
-        password = os.environ.get("NUHEAT_PASSWORD", "")
+        email = pc.get("email") or os.environ.get("NUHEAT_EMAIL", "")
+        password = pc.get("password") or os.environ.get("NUHEAT_PASSWORD", "")
         if not email or not password:
             raise ValueError("NUHEAT_EMAIL and NUHEAT_PASSWORD are required")
         api = LegacyAPI(email, password)
-        serial_numbers = os.environ.get("NUHEAT_SERIAL_NUMBERS", "")
-        if serial_numbers:
-            api.serial_numbers = [s.strip() for s in serial_numbers.split(",")]
+        serial_numbers_saved = pc.get("serial_numbers")
+        if serial_numbers_saved:
+            api.serial_numbers = serial_numbers_saved
+        else:
+            serial_numbers = os.environ.get("NUHEAT_SERIAL_NUMBERS", "")
+            if serial_numbers:
+                api.serial_numbers = [s.strip() for s in serial_numbers.split(",")]
 
     return ThermostatManager(api)
 
@@ -317,6 +326,15 @@ async def update_settings(req: UpdateSettingsRequest):
 
     if changes:
         activity_log.log("settings", "Settings updated: " + ", ".join(changes))
+        # Persist all runtime settings
+        persistent_config.update({
+            "poll_interval": settings.poll_interval,
+            "rate_limit_reads": settings.rate_limit_reads,
+            "rate_limit_writes": settings.rate_limit_writes,
+            "write_throttle": settings.write_throttle,
+            "debug_mode": settings.debug_mode,
+            "api_logging": settings.api_logging,
+        })
 
     return {"settings": settings.to_dict(), "changes": changes}
 
@@ -407,6 +425,13 @@ async def update_account(req: UpdateAccountRequest):
 
     if changes:
         activity_log.log("settings", "Account updated: " + ", ".join(changes))
+        # Persist account config
+        persist = {"serial_numbers": api.serial_numbers}
+        if req.email is not None:
+            persist["email"] = req.email
+        if req.password is not None:
+            persist["password"] = req.password
+        persistent_config.update(persist)
 
     return {
         "success": auth_ok,
