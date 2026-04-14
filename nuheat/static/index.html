@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NuHeat Thermostat Control</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #16213e;
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        header h1 {
+            font-size: 22px;
+            font-weight: 600;
+            color: #e94560;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .unit-toggle {
+            background: #0f3460;
+            border: none;
+            color: #e0e0e0;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .unit-toggle:hover { background: #1a4a8a; }
+
+        .refresh-btn {
+            background: #0f3460;
+            border: none;
+            color: #e0e0e0;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .refresh-btn:hover { background: #1a4a8a; }
+        .refresh-btn.spinning { animation: spin 1s linear infinite; }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot.connected { background: #4ecca3; }
+        .status-dot.disconnected { background: #e94560; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 24px;
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: #16213e;
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid #0f3460;
+            transition: border-color 0.3s;
+        }
+
+        .card:hover { border-color: #1a4a8a; }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .card-serial {
+            font-size: 12px;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        .card-badges {
+            display: flex;
+            gap: 8px;
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge.heating {
+            background: #e945601a;
+            color: #e94560;
+            border: 1px solid #e9456040;
+        }
+
+        .badge.idle {
+            background: #4ecca31a;
+            color: #4ecca3;
+            border: 1px solid #4ecca340;
+        }
+
+        .badge.offline {
+            background: #8882;
+            color: #888;
+            border: 1px solid #8884;
+        }
+
+        .badge.online {
+            background: #4ecca31a;
+            color: #4ecca3;
+            border: 1px solid #4ecca340;
+        }
+
+        .temp-display {
+            text-align: center;
+            margin: 24px 0;
+        }
+
+        .current-temp {
+            font-size: 64px;
+            font-weight: 300;
+            color: #fff;
+            line-height: 1;
+        }
+
+        .current-temp .unit {
+            font-size: 28px;
+            color: #888;
+            vertical-align: super;
+        }
+
+        .current-label {
+            font-size: 13px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .target-section {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .target-label {
+            font-size: 13px;
+            color: #888;
+        }
+
+        .target-value {
+            font-size: 28px;
+            font-weight: 500;
+            color: #e94560;
+            min-width: 90px;
+            text-align: center;
+        }
+
+        .target-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .temp-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 2px solid #0f3460;
+            background: transparent;
+            color: #e0e0e0;
+            font-size: 22px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            line-height: 1;
+        }
+
+        .temp-btn:hover {
+            border-color: #e94560;
+            color: #e94560;
+        }
+
+        .temp-btn:active {
+            background: #e945601a;
+        }
+
+        .temp-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .card-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .action-btn {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .action-btn.primary {
+            background: #e94560;
+            color: #fff;
+        }
+
+        .action-btn.primary:hover { background: #d63851; }
+
+        .action-btn.secondary {
+            background: #0f3460;
+            color: #e0e0e0;
+        }
+
+        .action-btn.secondary:hover { background: #1a4a8a; }
+
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .schedule-info {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            margin-bottom: 16px;
+        }
+
+        .schedule-info .mode {
+            color: #4ecca3;
+            font-weight: 500;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 1000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.success { background: #4ecca3; color: #1a1a2e; }
+        .toast.error { background: #e94560; color: #fff; }
+
+        .loading {
+            text-align: center;
+            padding: 80px 24px;
+            color: #888;
+            font-size: 16px;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #0f3460;
+            border-top-color: #e94560;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @media (max-width: 480px) {
+            .grid { padding: 16px; gap: 16px; }
+            .card { padding: 20px; }
+            .current-temp { font-size: 52px; }
+            header h1 { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>NuHeat Control</h1>
+        <div class="header-controls">
+            <span class="status-dot disconnected" id="statusDot"></span>
+            <button class="unit-toggle" id="unitToggle" onclick="toggleUnit()">°F</button>
+            <button class="refresh-btn" id="refreshBtn" onclick="refresh()">&#8635;</button>
+        </div>
+    </header>
+
+    <div id="content">
+        <div class="loading">
+            <div class="loading-spinner"></div>
+            Loading thermostats...
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let thermostats = [];
+        let useFahrenheit = true;
+        let pendingTargets = {};
+        let refreshTimer = null;
+
+        const AUTO_REFRESH_MS = 30000;
+
+        function formatTemp(celsius) {
+            if (useFahrenheit) {
+                return Math.round(celsius * 9 / 5 + 32) + "°F";
+            }
+            return celsius.toFixed(1) + "°C";
+        }
+
+        function tempStep() {
+            return useFahrenheit ? 1 : 0.5;
+        }
+
+        function getTargetC(serial) {
+            if (pendingTargets[serial] !== undefined) {
+                return pendingTargets[serial];
+            }
+            const t = thermostats.find(t => t.serial_number === serial);
+            return t ? t.target_temperature_c : 22;
+        }
+
+        function toggleUnit() {
+            useFahrenheit = !useFahrenheit;
+            document.getElementById("unitToggle").textContent = useFahrenheit ? "°F" : "°C";
+            render();
+        }
+
+        function showToast(message, type = "success") {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.className = "toast " + type + " show";
+            setTimeout(() => { toast.className = "toast " + type; }, 3000);
+        }
+
+        async function fetchThermostats() {
+            try {
+                const resp = await fetch("/api/thermostats");
+                if (!resp.ok) throw new Error("Failed to fetch");
+                thermostats = await resp.json();
+                document.getElementById("statusDot").className = "status-dot connected";
+                return true;
+            } catch (e) {
+                document.getElementById("statusDot").className = "status-dot disconnected";
+                return false;
+            }
+        }
+
+        async function refresh() {
+            const btn = document.getElementById("refreshBtn");
+            btn.classList.add("spinning");
+            await fetchThermostats();
+            pendingTargets = {};
+            render();
+            btn.classList.remove("spinning");
+        }
+
+        function adjustTemp(serial, delta) {
+            const current = getTargetC(serial);
+            const t = thermostats.find(t => t.serial_number === serial);
+            if (!t) return;
+
+            let newC;
+            if (useFahrenheit) {
+                const currentF = Math.round(current * 9 / 5 + 32);
+                const newF = currentF + delta;
+                newC = (newF - 32) * 5 / 9;
+            } else {
+                newC = current + delta;
+            }
+
+            newC = Math.max(t.min_temperature_c, Math.min(t.max_temperature_c, newC));
+            pendingTargets[serial] = newC;
+            render();
+        }
+
+        async function setTemperature(serial) {
+            const targetC = getTargetC(serial);
+            const btn = document.querySelector(`[data-set="${serial}"]`);
+            if (btn) btn.disabled = true;
+
+            try {
+                const resp = await fetch(`/api/thermostats/${serial}/temperature`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ temperature_c: targetC }),
+                });
+                if (!resp.ok) throw new Error("Failed");
+                delete pendingTargets[serial];
+                showToast("Temperature set to " + formatTemp(targetC));
+                setTimeout(refresh, 2000);
+            } catch (e) {
+                showToast("Failed to set temperature", "error");
+            }
+
+            if (btn) btn.disabled = false;
+        }
+
+        async function resumeSchedule(serial) {
+            const btn = document.querySelector(`[data-resume="${serial}"]`);
+            if (btn) btn.disabled = true;
+
+            try {
+                const resp = await fetch(`/api/thermostats/${serial}/resume`, {
+                    method: "POST",
+                });
+                if (!resp.ok) throw new Error("Failed");
+                showToast("Schedule resumed");
+                setTimeout(refresh, 2000);
+            } catch (e) {
+                showToast("Failed to resume schedule", "error");
+            }
+
+            if (btn) btn.disabled = false;
+        }
+
+        function render() {
+            if (thermostats.length === 0) {
+                document.getElementById("content").innerHTML =
+                    '<div class="loading">No thermostats found.<br>Check your NUHEAT_SERIAL_NUMBERS configuration.</div>';
+                return;
+            }
+
+            const html = '<div class="grid">' + thermostats.map(t => {
+                const targetC = getTargetC(t.serial_number);
+                const hasPending = pendingTargets[t.serial_number] !== undefined;
+                const heatingBadge = t.heating
+                    ? '<span class="badge heating">Heating</span>'
+                    : '<span class="badge idle">Idle</span>';
+                const onlineBadge = t.online
+                    ? ''
+                    : '<span class="badge offline">Offline</span>';
+
+                return `
+                    <div class="card">
+                        <div class="card-header">
+                            <div>
+                                <div class="card-title">${t.name || "Thermostat"}</div>
+                                <div class="card-serial">${t.serial_number}${t.group ? " &middot; " + t.group : ""}</div>
+                            </div>
+                            <div class="card-badges">
+                                ${heatingBadge}
+                                ${onlineBadge}
+                            </div>
+                        </div>
+
+                        <div class="temp-display">
+                            <div class="current-temp">
+                                ${useFahrenheit ? Math.round(t.current_temperature_f) : t.current_temperature_c.toFixed(1)}<span class="unit">${useFahrenheit ? "°F" : "°C"}</span>
+                            </div>
+                            <div class="current-label">Current Temperature</div>
+                        </div>
+
+                        <div class="target-section">
+                            <div>
+                                <div class="target-label">Target</div>
+                            </div>
+                            <div class="target-controls">
+                                <button class="temp-btn" onclick="adjustTemp('${t.serial_number}', -${tempStep()})">-</button>
+                                <div class="target-value">${formatTemp(targetC)}</div>
+                                <button class="temp-btn" onclick="adjustTemp('${t.serial_number}', ${tempStep()})">+</button>
+                            </div>
+                        </div>
+
+                        <div class="schedule-info">
+                            Mode: <span class="mode">${t.schedule_mode_name}</span>
+                            ${t.hold_until ? " &middot; Until " + new Date(t.hold_until).toLocaleString() : ""}
+                        </div>
+
+                        <div class="card-actions">
+                            <button class="action-btn primary${hasPending ? "" : " secondary"}" data-set="${t.serial_number}" onclick="setTemperature('${t.serial_number}')"${!hasPending ? " disabled" : ""}>
+                                ${hasPending ? "Set Temperature" : "Set Temperature"}
+                            </button>
+                            <button class="action-btn secondary" data-resume="${t.serial_number}" onclick="resumeSchedule('${t.serial_number}')">
+                                Resume Schedule
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join("") + '</div>';
+
+            document.getElementById("content").innerHTML = html;
+        }
+
+        async function init() {
+            await fetchThermostats();
+            render();
+            refreshTimer = setInterval(async () => {
+                await fetchThermostats();
+                render();
+            }, AUTO_REFRESH_MS);
+        }
+
+        init();
+    </script>
+</body>
+</html>

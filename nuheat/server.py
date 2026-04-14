@@ -4,9 +4,13 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 from nuheat.api.legacy import LegacyAPI
 from nuheat.api.oauth2 import OAuth2API
@@ -76,6 +80,14 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+# --- Frontend ---
+
+@app.get("/", include_in_schema=False)
+async def dashboard():
+    """Serve the web dashboard."""
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 # --- Request/Response Models ---
