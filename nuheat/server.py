@@ -39,6 +39,7 @@ class Settings:
         self.rate_limit_writes = int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))
         self.write_throttle = int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
         self.debug_mode = activity_log.debug_mode
+        self.api_logging = False
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +48,7 @@ class Settings:
             "rate_limit_writes": self.rate_limit_writes,
             "write_throttle": self.write_throttle,
             "debug_mode": self.debug_mode,
+            "api_logging": self.api_logging,
         }
 
 
@@ -184,14 +186,19 @@ app = FastAPI(
 
 # --- Rate Limiting Middleware ---
 
+STATIC_PATHS = ("/", "/api-reference", "/logs", "/settings", "/docs", "/redoc", "/openapi.json")
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next) -> Response:
     path = request.url.path
     # Skip rate limiting for static pages, docs, and logs
-    if path in ("/", "/api-reference", "/logs", "/settings", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/"):
+    if path in STATIC_PATHS or path.startswith("/docs/"):
         return await call_next(request)
 
     ip = request.client.host if request.client else "unknown"
+    method = request.method
+    start = time.time()
 
     if _is_write_path(path):
         if not rate_limiter.check_write(ip):
@@ -210,7 +217,19 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
                 content={"detail": f"Read rate limit exceeded ({settings.rate_limit_reads}/min). Try again shortly."},
             )
 
-    return await call_next(request)
+    response = await call_next(request)
+
+    if settings.api_logging and path != "/api/logs":
+        duration_ms = round((time.time() - start) * 1000)
+        query = str(request.url.query) if request.url.query else ""
+        activity_log.log(
+            "api_request",
+            f"{method} {path} -> {response.status_code} ({duration_ms}ms) from {ip}",
+            method=method, path=path, query=query,
+            status=response.status_code, duration_ms=duration_ms, ip=ip,
+        )
+
+    return response
 
 
 # --- Frontend ---
@@ -247,6 +266,7 @@ class UpdateSettingsRequest(BaseModel):
     rate_limit_writes: int | None = Field(None, ge=1, le=100, description="Write rate limit per minute per IP (1-100)")
     write_throttle: int | None = Field(None, ge=0, le=300, description="Minimum seconds between write commands (0-300)")
     debug_mode: bool | None = Field(None, description="Write every log entry to disk immediately")
+    api_logging: bool | None = Field(None, description="Log every API request with method, path, IP, status, and duration")
 
 
 @app.get("/api/settings")
@@ -289,6 +309,11 @@ async def update_settings(req: UpdateSettingsRequest):
         settings.debug_mode = req.debug_mode
         activity_log.debug_mode = req.debug_mode
         changes.append(f"debug_mode: {old} -> {req.debug_mode}")
+
+    if req.api_logging is not None and req.api_logging != settings.api_logging:
+        old = settings.api_logging
+        settings.api_logging = req.api_logging
+        changes.append(f"api_logging: {old} -> {req.api_logging}")
 
     if changes:
         activity_log.log("settings", "Settings updated: " + ", ".join(changes))

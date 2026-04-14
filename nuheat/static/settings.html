@@ -319,6 +319,32 @@
             </div>
         </div>
 
+        <div class="setting-group">
+            <h2>API Request Logging</h2>
+            <div class="desc">
+                When enabled, every API request from any device is recorded in the activity log --
+                including the HTTP method, path, query string, source IP address, response status
+                code, and how long the request took to process. This is useful for seeing which
+                devices are talking to the server, how often they're polling, and whether any
+                requests are failing. Turn this off when you're done troubleshooting to keep the
+                logs clean and reduce noise.
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">API request logging</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="apiLogging">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="setting-example">
+                <strong>Off</strong> = only internal events are logged (default, keeps logs clean)<br>
+                <strong>On</strong> = every API call is logged, e.g.:<br>
+                &nbsp;&nbsp;GET /api/thermostats -> 200 (12ms) from 192.168.1.42<br>
+                &nbsp;&nbsp;GET /qs/set?serial=ABC123&amp;temp_f=72 -> 200 (1540ms) from 192.168.1.10<br>
+                &nbsp;&nbsp;PUT /api/thermostats/ABC123/temperature -> 200 (1520ms) from 192.168.1.5
+            </div>
+        </div>
+
         <div class="actions">
             <button class="save-btn" id="saveBtn" onclick="saveSettings()">Save Changes</button>
             <button class="reset-btn" onclick="loadSettings()">Reset</button>
@@ -356,6 +382,7 @@
                 document.getElementById("rateLimitWrites").value = data.rate_limit_writes;
                 document.getElementById("writeThrottle").value = data.write_throttle;
                 document.getElementById("debugMode").checked = data.debug_mode;
+                document.getElementById("apiLogging").checked = data.api_logging;
                 document.getElementById("changesList").innerHTML = "";
             } catch (e) {
                 showToast("Failed to load settings", "error");
@@ -372,12 +399,14 @@
             const rlw = parseInt(document.getElementById("rateLimitWrites").value);
             const wt = parseInt(document.getElementById("writeThrottle").value);
             const dm = document.getElementById("debugMode").checked;
+            const al = document.getElementById("apiLogging").checked;
 
             if (pi !== original.poll_interval) payload.poll_interval = pi;
             if (rlr !== original.rate_limit_reads) payload.rate_limit_reads = rlr;
             if (rlw !== original.rate_limit_writes) payload.rate_limit_writes = rlw;
             if (wt !== original.write_throttle) payload.write_throttle = wt;
             if (dm !== original.debug_mode) payload.debug_mode = dm;
+            if (al !== original.api_logging) payload.api_logging = al;
 
             if (Object.keys(payload).length === 0) {
                 showToast("No changes to save");
