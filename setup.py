@@ -5,7 +5,7 @@ setup(
     version="0.1.0",
     description="Control NuHeat floor heating thermostats via CLI and REST API",
     packages=find_packages(),
-    package_data={"nuheat": ["static/*.html"]},
+    package_data={"nuheat": ["static/*.html", "static/*.png", "static/*.ico"]},
     python_requires=">=3.11",
     install_requires=[
         "aiohttp>=3.9,<4",

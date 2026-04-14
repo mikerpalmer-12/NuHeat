@@ -250,6 +250,16 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
 
 # --- Frontend ---
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(STATIC_DIR / "favicon.ico")
+
+
+@app.get("/icon.png", include_in_schema=False)
+async def icon():
+    return FileResponse(STATIC_DIR / "icon.png", media_type="image/png")
+
+
 @app.get("/", include_in_schema=False)
 async def dashboard():
     """Serve the web dashboard."""
