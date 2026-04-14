@@ -158,6 +158,20 @@
             font-family: monospace;
         }
 
+        .setting-example {
+            font-size: 12px;
+            color: #555;
+            margin-top: 8px;
+            line-height: 1.5;
+            padding: 8px 12px;
+            background: #1a1a2e;
+            border-radius: 6px;
+        }
+
+        .setting-example strong {
+            color: #888;
+        }
+
         .note {
             font-size: 12px;
             color: #555;
@@ -184,32 +198,69 @@
     <div class="content">
         <div class="setting-group">
             <h2>Background Polling</h2>
-            <div class="desc">How often the server fetches fresh data from NuHeat.</div>
+            <div class="desc">
+                This controls how often the server contacts NuHeat to fetch the latest thermostat
+                data (current temperature, heating status, schedule mode). A shorter interval means
+                fresher data on the dashboard, but sends more requests to NuHeat. The default of
+                300 seconds matches what Home Assistant and other integrations use.
+            </div>
             <div class="setting-row">
                 <span class="setting-label">Poll interval <span class="unit">(seconds)</span></span>
                 <input type="number" class="setting-input" id="pollInterval" min="30" max="3600" step="30">
+            </div>
+            <div class="setting-example">
+                <strong>60</strong> = poll every minute (fast updates, more API traffic)<br>
+                <strong>300</strong> = poll every 5 minutes (recommended default)<br>
+                <strong>900</strong> = poll every 15 minutes (minimal API traffic)
             </div>
         </div>
 
         <div class="setting-group">
             <h2>Rate Limits</h2>
-            <div class="desc">Maximum requests per minute per IP address.</div>
-            <div class="setting-row">
-                <span class="setting-label">Read limit <span class="unit">(per min)</span></span>
-                <input type="number" class="setting-input" id="rateLimitReads" min="1" max="1000">
+            <div class="desc">
+                Limits how many requests a single IP address can make to this server per minute.
+                This protects against a misconfigured device or script flooding the server with requests.
+                Read limits apply to status/list endpoints. Write limits apply to set-temperature,
+                resume-schedule, and force-refresh endpoints. Requests that exceed the limit get
+                an HTTP 429 response.
             </div>
             <div class="setting-row">
-                <span class="setting-label">Write limit <span class="unit">(per min)</span></span>
+                <span class="setting-label">Read limit <span class="unit">(per min per IP)</span></span>
+                <input type="number" class="setting-input" id="rateLimitReads" min="1" max="1000">
+            </div>
+            <div class="setting-example">
+                <strong>60</strong> = one device can check status once per second (default)<br>
+                <strong>10</strong> = stricter, allows polling at most every 6 seconds<br>
+                <strong>200</strong> = more relaxed, for dashboards refreshing frequently
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Write limit <span class="unit">(per min per IP)</span></span>
                 <input type="number" class="setting-input" id="rateLimitWrites" min="1" max="100">
+            </div>
+            <div class="setting-example">
+                <strong>10</strong> = allows 10 temperature changes per minute per device (default)<br>
+                <strong>3</strong> = stricter, good if you want to prevent accidental rapid changes<br>
+                <strong>30</strong> = more relaxed, for automation scripts that batch changes
             </div>
         </div>
 
         <div class="setting-group">
             <h2>Write Throttle</h2>
-            <div class="desc">Minimum time between temperature change commands sent to NuHeat.</div>
+            <div class="desc">
+                The minimum time the server waits between sending temperature change commands to
+                NuHeat's API. This is a global throttle across all clients -- even if multiple
+                devices or users try to change temperatures at the same time, commands are queued
+                and spaced out by this delay. This prevents overwhelming NuHeat when several
+                thermostats are adjusted in quick succession.
+            </div>
             <div class="setting-row">
                 <span class="setting-label">Throttle delay <span class="unit">(seconds)</span></span>
                 <input type="number" class="setting-input" id="writeThrottle" min="0" max="300">
+            </div>
+            <div class="setting-example">
+                <strong>60</strong> = one command to NuHeat per minute at most (safe default)<br>
+                <strong>30</strong> = faster response for multiple thermostat changes<br>
+                <strong>0</strong> = no throttle, send commands immediately (use with caution)
             </div>
         </div>
 
