@@ -3,11 +3,13 @@
 import asyncio
 import logging
 import os
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -22,6 +24,59 @@ logger = logging.getLogger(__name__)
 manager: ThermostatManager | None = None
 _poll_task: asyncio.Task | None = None
 
+
+# --- Rate Limiter ---
+
+RATE_LIMIT_READS = int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))   # per minute per IP
+RATE_LIMIT_WRITES = int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))  # per minute per IP
+
+
+class RateLimiter:
+    """Simple sliding-window rate limiter per IP address."""
+
+    def __init__(self):
+        self._read_hits: dict[str, list[float]] = defaultdict(list)
+        self._write_hits: dict[str, list[float]] = defaultdict(list)
+
+    def _prune(self, hits: list[float]) -> list[float]:
+        cutoff = time.time() - 60
+        return [t for t in hits if t > cutoff]
+
+    def check_read(self, ip: str) -> bool:
+        self._read_hits[ip] = self._prune(self._read_hits[ip])
+        if len(self._read_hits[ip]) >= RATE_LIMIT_READS:
+            return False
+        self._read_hits[ip].append(time.time())
+        return True
+
+    def check_write(self, ip: str) -> bool:
+        self._write_hits[ip] = self._prune(self._write_hits[ip])
+        if len(self._write_hits[ip]) >= RATE_LIMIT_WRITES:
+            return False
+        self._write_hits[ip].append(time.time())
+        return True
+
+
+rate_limiter = RateLimiter()
+
+WRITE_PATHS = {
+    "/api/thermostats/{serial_number}/temperature",
+    "/api/thermostats/{serial_number}/resume",
+    "/qs/set",
+    "/qs/resume",
+    "/api/refresh",
+}
+
+
+def _is_write_path(path: str) -> bool:
+    if path in ("/qs/set", "/qs/resume", "/api/refresh"):
+        return True
+    if "/temperature" in path or (path.count("/") >= 3 and path.endswith("/resume")):
+        return True
+    return False
+
+
+# --- Manager Setup ---
 
 def create_manager() -> ThermostatManager:
     """Create the appropriate API client based on environment config."""
@@ -48,7 +103,7 @@ def create_manager() -> ThermostatManager:
 
 
 async def poll_loop() -> None:
-    """Background task to periodically refresh thermostat data."""
+    """Background task: the ONLY thing that polls NuHeat on a schedule."""
     interval = int(os.environ.get("NUHEAT_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS))
     while True:
         try:
@@ -77,9 +132,36 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NuHeat Thermostat API",
     description="REST API for controlling NuHeat floor heating thermostats",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
+
+
+# --- Rate Limiting Middleware ---
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next) -> Response:
+    path = request.url.path
+    # Skip rate limiting for static pages and docs
+    if path in ("/", "/api-reference", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/"):
+        return await call_next(request)
+
+    ip = request.client.host if request.client else "unknown"
+
+    if _is_write_path(path):
+        if not rate_limiter.check_write(ip):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": f"Write rate limit exceeded ({RATE_LIMIT_WRITES}/min). Try again shortly."},
+            )
+    else:
+        if not rate_limiter.check_read(ip):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": f"Read rate limit exceeded ({RATE_LIMIT_READS}/min). Try again shortly."},
+            )
+
+    return await call_next(request)
 
 
 # --- Frontend ---
@@ -111,10 +193,6 @@ class SetTemperatureRequest(BaseModel):
         return None
 
 
-class ResumeScheduleRequest(BaseModel):
-    pass
-
-
 class ThermostatResponse(BaseModel):
     serial_number: str
     name: str
@@ -131,6 +209,7 @@ class ThermostatResponse(BaseModel):
     schedule_mode_name: str
     hold_until: str | None
     firmware: str
+    last_updated: str
 
 
 class MessageResponse(BaseModel):
@@ -138,27 +217,37 @@ class MessageResponse(BaseModel):
     success: bool
 
 
-# --- Endpoints ---
+# --- Helper ---
+
+def _thermostat_response(t) -> dict:
+    """Build a thermostat response dict with last_updated."""
+    d = t.to_dict()
+    d["last_updated"] = manager.last_updated if manager else ""
+    return d
+
+
+# --- Read Endpoints (cache only, never hit NuHeat) ---
 
 @app.get("/api/thermostats", response_model=list[ThermostatResponse])
 async def list_thermostats():
-    """List all thermostats with current status."""
+    """List all thermostats from cache. Data refreshes every 5 minutes."""
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
-    thermostats = await manager.refresh()
-    return [t.to_dict() for t in thermostats]
+    return [_thermostat_response(t) for t in manager.get_all_cached()]
 
 
 @app.get("/api/thermostats/{serial_number}", response_model=ThermostatResponse)
 async def get_thermostat(serial_number: str):
-    """Get a single thermostat's current status."""
+    """Get a single thermostat from cache."""
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
-    thermostat = await manager.get_thermostat(serial_number)
+    thermostat = manager.get_cached(serial_number)
     if not thermostat:
         raise HTTPException(status_code=404, detail=f"Thermostat {serial_number} not found")
-    return thermostat.to_dict()
+    return _thermostat_response(thermostat)
 
+
+# --- Write Endpoints (hit NuHeat, throttled) ---
 
 @app.put("/api/thermostats/{serial_number}/temperature", response_model=MessageResponse)
 async def set_temperature(serial_number: str, req: SetTemperatureRequest):
@@ -195,6 +284,33 @@ async def resume_schedule(serial_number: str):
     return {"message": "Schedule resumed", "success": True}
 
 
+# --- Force Refresh (throttled to once per 60s) ---
+
+@app.post("/api/refresh")
+async def force_refresh():
+    """Force a cache refresh from NuHeat. Throttled to once per 60 seconds."""
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+
+    refreshed = await manager.force_refresh()
+    if not refreshed:
+        elapsed = int(time.time() - manager.last_updated_epoch)
+        return {
+            "refreshed": False,
+            "message": f"Throttled. Last refresh was {elapsed}s ago. Try again after 60s.",
+            "last_updated": manager.last_updated,
+        }
+
+    return {
+        "refreshed": True,
+        "message": "Cache refreshed from NuHeat",
+        "last_updated": manager.last_updated,
+        "thermostats": len(manager.get_all_cached()),
+    }
+
+
+# --- Health ---
+
 @app.get("/api/health")
 async def health():
     """Health check endpoint."""
@@ -203,39 +319,31 @@ async def health():
         "status": "ok",
         "thermostats_cached": len(cached),
         "api_type": os.environ.get("NUHEAT_API_TYPE", "legacy"),
+        "last_updated": manager.last_updated if manager else "",
+        "rate_limits": {
+            "reads_per_minute": RATE_LIMIT_READS,
+            "writes_per_minute": RATE_LIMIT_WRITES,
+        },
     }
 
 
-# --- Query String Endpoints ---
-# Simple GET-only interface for easy integration with systems that can't
-# send JSON bodies (webhooks, browser bookmarks, curl one-liners, IoT devices).
-#
-# Examples:
-#   GET /qs/status
-#   GET /qs/status?serial=ABCDEF
-#   GET /qs/set?serial=ABCDEF&temp_f=72
-#   GET /qs/set?serial=ABCDEF&temp_c=22.5&hold_until=2025-12-01T08:00:00
-#   GET /qs/resume?serial=ABCDEF
+# --- Query String Endpoints (reads from cache, writes are throttled) ---
 
 @app.get("/qs/status")
 async def qs_status(
     serial: str | None = Query(None, description="Thermostat serial number (omit for all)"),
 ):
-    """Get thermostat status via query string.
-
-    Omit `serial` to list all thermostats. Provide `serial` for a single one.
-    """
+    """Get thermostat status via query string. Served from cache."""
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
 
     if serial:
-        thermostat = await manager.get_thermostat(serial)
+        thermostat = manager.get_cached(serial)
         if not thermostat:
             raise HTTPException(status_code=404, detail=f"Thermostat {serial} not found")
-        return thermostat.to_dict()
+        return _thermostat_response(thermostat)
     else:
-        thermostats = await manager.refresh()
-        return [t.to_dict() for t in thermostats]
+        return [_thermostat_response(t) for t in manager.get_all_cached()]
 
 
 @app.get("/qs/set")
@@ -245,10 +353,7 @@ async def qs_set(
     temp_f: float | None = Query(None, description="Target temperature in Fahrenheit"),
     hold_until: str | None = Query(None, description="ISO datetime for temporary hold"),
 ):
-    """Set thermostat temperature via query string.
-
-    Provide `temp_c` or `temp_f`. Omit `hold_until` for a permanent hold.
-    """
+    """Set thermostat temperature via query string."""
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
 
