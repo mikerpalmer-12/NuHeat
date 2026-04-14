@@ -463,6 +463,15 @@
                 const resp = await fetch("/api/thermostats");
                 if (!resp.ok) throw new Error("Failed to fetch");
                 thermostats = await resp.json();
+                scheduleCache = {};  // clear so visible schedules re-fetch fresh data
+                // Re-fetch schedules for any currently visible panels
+                for (const serial of Object.keys(scheduleVisible)) {
+                    if (scheduleVisible[serial]) {
+                        fetch(`/api/thermostats/${serial}/schedule`)
+                            .then(r => r.ok ? r.json() : null)
+                            .then(data => { if (data) { scheduleCache[serial] = data.schedule; render(); } });
+                    }
+                }
                 document.getElementById("statusDot").className = "status-dot connected";
                 return true;
             } catch (e) {
