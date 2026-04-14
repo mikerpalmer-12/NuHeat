@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from nuheat.activity_log import activity_log
 from nuheat.api.base import NuHeatAPI
 from nuheat.config import MIN_SET_INTERVAL_SECONDS, ScheduleMode
 from nuheat.thermostat import Thermostat
@@ -45,7 +46,12 @@ class ThermostatManager:
         return self._last_refresh_time
 
     async def authenticate(self) -> bool:
-        return await self._api.authenticate()
+        success = await self._api.authenticate()
+        if success:
+            activity_log.log("auth", "Authentication successful")
+        else:
+            activity_log.log("error", "Authentication failed")
+        return success
 
     async def refresh(self) -> list[Thermostat]:
         """Fetch all thermostats from NuHeat and update the cache.
@@ -60,6 +66,8 @@ class ThermostatManager:
             self._cache[t.serial_number] = t
             thermostats.append(t)
         self._mark_refreshed()
+        activity_log.log("poll", f"Cache refreshed: {len(thermostats)} thermostats",
+                         count=len(thermostats))
         return thermostats
 
     async def force_refresh(self) -> bool:
@@ -69,8 +77,11 @@ class ThermostatManager:
         """
         elapsed = time.time() - self._last_refresh_time
         if elapsed < MIN_REFRESH_INTERVAL_SECONDS:
+            activity_log.log("refresh", "Force refresh throttled",
+                             seconds_since_last=int(elapsed))
             return False
         await self.refresh()
+        activity_log.log("refresh", "Force refresh completed")
         return True
 
     def get_cached(self, serial_number: str) -> Thermostat | None:
@@ -92,6 +103,8 @@ class ThermostatManager:
         if elapsed < MIN_SET_INTERVAL_SECONDS:
             wait = MIN_SET_INTERVAL_SECONDS - elapsed
             logger.info("Throttling: waiting %.0fs before next set command", wait)
+            activity_log.log("write", f"Write throttled for {wait:.0f}s",
+                             serial=serial_number, wait_seconds=round(wait))
             await asyncio.sleep(wait)
 
         mode = ScheduleMode.TEMPORARY_HOLD if hold_until else ScheduleMode.HOLD
@@ -110,8 +123,14 @@ class ThermostatManager:
                 self._cache[serial_number].schedule_mode = mode
                 self._cache[serial_number].schedule_mode_name = mode.name.replace("_", " ").title()
             logger.info("Set %s to %.1f°C", serial_number, temperature_c)
+            activity_log.log("write", f"Set {serial_number} to {temperature_c:.1f}°C",
+                             serial=serial_number, temperature_c=temperature_c,
+                             mode=mode.name, hold_until=hold_until)
             # Targeted refresh after write to confirm state
             await self._refresh_one(serial_number)
+        else:
+            activity_log.log("error", f"Failed to set temperature on {serial_number}",
+                             serial=serial_number, temperature_c=temperature_c)
         return success
 
     async def resume_schedule(self, serial_number: str) -> bool:
@@ -123,8 +142,13 @@ class ThermostatManager:
             if serial_number in self._cache:
                 self._cache[serial_number].schedule_mode = ScheduleMode.RUN
                 self._cache[serial_number].schedule_mode_name = "Run"
+            activity_log.log("write", f"Resumed schedule for {serial_number}",
+                             serial=serial_number)
             # Targeted refresh after write
             await self._refresh_one(serial_number)
+        else:
+            activity_log.log("error", f"Failed to resume schedule for {serial_number}",
+                             serial=serial_number)
         return success
 
     async def _refresh_one(self, serial_number: str) -> None:
@@ -137,6 +161,8 @@ class ThermostatManager:
                 self._mark_refreshed()
         except Exception:
             logger.exception("Failed to refresh %s after write", serial_number)
+            activity_log.log("error", f"Post-write refresh failed for {serial_number}",
+                             serial=serial_number)
 
     def _mark_refreshed(self) -> None:
         self._last_refresh_time = time.time()

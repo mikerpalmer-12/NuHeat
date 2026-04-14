@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+from nuheat.activity_log import activity_log
 from nuheat.api.legacy import LegacyAPI
 from nuheat.api.oauth2 import OAuth2API
 from nuheat.config import DEFAULT_POLL_INTERVAL_SECONDS, ScheduleMode
@@ -142,20 +143,24 @@ app = FastAPI(
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next) -> Response:
     path = request.url.path
-    # Skip rate limiting for static pages and docs
-    if path in ("/", "/api-reference", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/"):
+    # Skip rate limiting for static pages, docs, and logs
+    if path in ("/", "/api-reference", "/logs", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/"):
         return await call_next(request)
 
     ip = request.client.host if request.client else "unknown"
 
     if _is_write_path(path):
         if not rate_limiter.check_write(ip):
+            activity_log.log("rate_limit", f"Write rate limit hit by {ip}",
+                             ip=ip, path=path)
             return JSONResponse(
                 status_code=429,
                 content={"detail": f"Write rate limit exceeded ({RATE_LIMIT_WRITES}/min). Try again shortly."},
             )
     else:
         if not rate_limiter.check_read(ip):
+            activity_log.log("rate_limit", f"Read rate limit hit by {ip}",
+                             ip=ip, path=path)
             return JSONResponse(
                 status_code=429,
                 content={"detail": f"Read rate limit exceeded ({RATE_LIMIT_READS}/min). Try again shortly."},
@@ -176,6 +181,26 @@ async def dashboard():
 async def api_reference():
     """Serve the API reference page."""
     return FileResponse(STATIC_DIR / "api.html")
+
+
+@app.get("/logs", include_in_schema=False)
+async def logs_page():
+    """Serve the activity logs page."""
+    return FileResponse(STATIC_DIR / "logs.html")
+
+
+# --- Logs API ---
+
+@app.get("/api/logs")
+async def get_logs(
+    limit: int = Query(100, description="Max entries to return"),
+    category: str | None = Query(None, description="Filter by category: auth, poll, read, write, rate_limit, refresh, error"),
+):
+    """Get activity log entries for troubleshooting."""
+    return {
+        "entries": activity_log.get_entries(limit=limit, category=category),
+        "categories": ["auth", "poll", "write", "rate_limit", "refresh", "error"],
+    }
 
 
 # --- Request/Response Models ---
