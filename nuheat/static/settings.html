@@ -205,6 +205,81 @@
             color: #888;
         }
 
+        .setting-input-wide {
+            width: 100%;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .setting-input-wide:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        .serial-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .serial-tag {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: #0f3460;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .serial-remove {
+            cursor: pointer;
+            color: #e94560;
+            font-weight: bold;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .serial-remove:hover { color: #ff6b81; }
+
+        .serial-add-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .serial-add-row input {
+            flex: 1;
+        }
+
+        .add-btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            background: #0f3460;
+            color: #e0e0e0;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .add-btn:hover { background: #1a4a8a; }
+
+        .auth-status {
+            font-size: 12px;
+            margin-top: 4px;
+        }
+
+        .auth-status.ok { color: #4ecca3; }
+        .auth-status.fail { color: #e94560; }
+
         .note {
             font-size: 12px;
             color: #555;
@@ -229,6 +304,41 @@
     </header>
 
     <div class="content">
+        <div class="setting-group">
+            <h2>NuHeat Account</h2>
+            <div class="desc">
+                Your MyNuHeat login credentials and the serial numbers of your thermostats.
+                Changing the email or password will trigger a re-authentication with NuHeat.
+                The password field is always blank for security -- leave it empty to keep
+                the current password.
+            </div>
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
+                <span class="setting-label">Email</span>
+                <input type="email" class="setting-input-wide" id="accountEmail" placeholder="your-email@example.com">
+                <div class="auth-status" id="authStatus"></div>
+            </div>
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
+                <span class="setting-label">Password <span class="unit">(leave blank to keep current)</span></span>
+                <input type="password" class="setting-input-wide" id="accountPassword" placeholder="Enter new password or leave blank">
+            </div>
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
+                <span class="setting-label">Thermostat Serial Numbers</span>
+                <div class="serial-list" id="serialList"></div>
+                <div class="serial-add-row">
+                    <input type="text" class="setting-input-wide" id="newSerial" placeholder="Enter serial number">
+                    <button class="add-btn" onclick="addSerial()">Add</button>
+                </div>
+            </div>
+            <div class="setting-example">
+                Serial numbers can be found in the MyNuHeat app (thermostat settings),
+                on the mynuheat.com website, or on a sticker on the back of the thermostat.
+            </div>
+            <div style="margin-top:16px">
+                <button class="save-btn" onclick="saveAccount()" id="saveAccountBtn" style="width:100%">Save Account</button>
+            </div>
+            <div class="changes-list" id="accountChangesList"></div>
+        </div>
+
         <div class="setting-group">
             <h2>Background Polling</h2>
             <div class="desc">
@@ -362,6 +472,7 @@
 
     <script>
         let original = {};
+        let serialNumbers = [];
 
         function showToast(message, type = "success") {
             const toast = document.getElementById("toast");
@@ -369,6 +480,113 @@
             toast.className = "toast " + type + " show";
             setTimeout(() => { toast.className = "toast " + type; }, 3000);
         }
+
+        // --- Account ---
+
+        async function loadAccount() {
+            try {
+                const resp = await fetch("/api/account");
+                if (!resp.ok) throw new Error("Failed");
+                const data = await resp.json();
+                document.getElementById("accountEmail").value = data.email.includes("***") ? "" : data.email;
+                document.getElementById("accountEmail").placeholder = data.email || "your-email@example.com";
+                document.getElementById("accountPassword").value = "";
+                serialNumbers = data.serial_numbers || [];
+                renderSerials();
+                const status = document.getElementById("authStatus");
+                if (data.authenticated) {
+                    status.textContent = "Authenticated";
+                    status.className = "auth-status ok";
+                } else {
+                    status.textContent = "Not authenticated";
+                    status.className = "auth-status fail";
+                }
+                document.getElementById("accountChangesList").innerHTML = "";
+            } catch (e) {
+                showToast("Failed to load account info", "error");
+            }
+        }
+
+        function renderSerials() {
+            const container = document.getElementById("serialList");
+            if (serialNumbers.length === 0) {
+                container.innerHTML = '<span style="color:#555;font-size:13px">No thermostats configured</span>';
+                return;
+            }
+            container.innerHTML = serialNumbers.map((sn, i) =>
+                '<span class="serial-tag">' + sn +
+                ' <span class="serial-remove" onclick="removeSerial(' + i + ')">x</span></span>'
+            ).join("");
+        }
+
+        function addSerial() {
+            const input = document.getElementById("newSerial");
+            const val = input.value.trim();
+            if (!val) return;
+            if (serialNumbers.includes(val)) {
+                showToast("Serial number already in list", "error");
+                return;
+            }
+            serialNumbers.push(val);
+            input.value = "";
+            renderSerials();
+        }
+
+        function removeSerial(index) {
+            serialNumbers.splice(index, 1);
+            renderSerials();
+        }
+
+        async function saveAccount() {
+            const btn = document.getElementById("saveAccountBtn");
+            btn.disabled = true;
+
+            const payload = {};
+            const email = document.getElementById("accountEmail").value.trim();
+            const password = document.getElementById("accountPassword").value;
+
+            if (email) payload.email = email;
+            if (password) payload.password = password;
+            payload.serial_numbers = serialNumbers;
+
+            try {
+                const resp = await fetch("/api/account", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) throw new Error("Failed");
+                const data = await resp.json();
+                serialNumbers = data.serial_numbers || serialNumbers;
+                renderSerials();
+
+                if (data.changes.length > 0) {
+                    document.getElementById("accountChangesList").innerHTML =
+                        data.changes.map(c => "<div>" + c + "</div>").join("");
+                }
+                if (data.success) {
+                    showToast("Account saved");
+                    document.getElementById("authStatus").textContent = "Authenticated";
+                    document.getElementById("authStatus").className = "auth-status ok";
+                } else {
+                    showToast("Authentication failed - check credentials", "error");
+                    document.getElementById("authStatus").textContent = "Authentication failed";
+                    document.getElementById("authStatus").className = "auth-status fail";
+                }
+                document.getElementById("accountPassword").value = "";
+            } catch (e) {
+                showToast("Failed to save account", "error");
+            }
+
+            btn.disabled = false;
+        }
+
+        // Enter key in serial input adds the serial
+        document.addEventListener("DOMContentLoaded", () => {
+            document.getElementById("newSerial").addEventListener("keydown", e => {
+                if (e.key === "Enter") { e.preventDefault(); addSerial(); }
+            });
+        });
 
         async function loadSettings() {
             try {
@@ -437,6 +655,7 @@
         }
 
         loadSettings();
+        loadAccount();
     </script>
 </body>
 </html>

@@ -321,6 +321,100 @@ async def update_settings(req: UpdateSettingsRequest):
     return {"settings": settings.to_dict(), "changes": changes}
 
 
+# --- Account Config API ---
+
+@app.get("/api/account")
+async def get_account():
+    """Get current NuHeat account configuration (credentials are masked)."""
+    if not manager:
+        return {"email": "", "serial_numbers": [], "api_type": "legacy", "authenticated": False}
+
+    api = manager.api
+    api_type = os.environ.get("NUHEAT_API_TYPE", "legacy").lower()
+
+    if api_type == "legacy":
+        from nuheat.api.legacy import LegacyAPI
+        if isinstance(api, LegacyAPI):
+            email = api._email
+            masked = email[0] + "***" + email[email.index("@"):] if "@" in email else "***"
+            return {
+                "email": masked,
+                "serial_numbers": api.serial_numbers,
+                "api_type": "legacy",
+                "authenticated": api._session_id is not None,
+            }
+
+    return {"email": "", "serial_numbers": [], "api_type": api_type, "authenticated": False}
+
+
+class UpdateAccountRequest(BaseModel):
+    email: str | None = Field(None, description="NuHeat account email")
+    password: str | None = Field(None, description="NuHeat account password")
+    serial_numbers: list[str] | None = Field(None, description="List of thermostat serial numbers")
+
+
+@app.put("/api/account")
+async def update_account(req: UpdateAccountRequest):
+    """Update NuHeat credentials and/or serial numbers.
+
+    Changing credentials triggers a full re-authentication and cache refresh.
+    Changing serial numbers updates the list and refreshes the cache.
+    """
+    global manager
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+
+    api = manager.api
+    changes = []
+
+    from nuheat.api.legacy import LegacyAPI
+    if not isinstance(api, LegacyAPI):
+        raise HTTPException(status_code=400, detail="Account changes only supported for legacy API")
+
+    # Credentials change: rebuild the API client
+    needs_reauth = False
+    if req.email is not None and req.email != api._email:
+        api._email = req.email
+        api._session_id = None
+        needs_reauth = True
+        changes.append("email updated")
+
+    if req.password is not None:
+        api._password = req.password
+        api._session_id = None
+        needs_reauth = True
+        changes.append("password updated")
+
+    # Serial numbers change
+    if req.serial_numbers is not None:
+        cleaned = [s.strip() for s in req.serial_numbers if s.strip()]
+        old_count = len(api.serial_numbers)
+        api.serial_numbers = cleaned
+        changes.append(f"serial_numbers: {old_count} -> {len(cleaned)}")
+
+    # Re-authenticate if credentials changed
+    auth_ok = True
+    if needs_reauth:
+        auth_ok = await manager.authenticate()
+        if auth_ok:
+            changes.append("re-authenticated successfully")
+        else:
+            changes.append("authentication FAILED - check credentials")
+
+    # Refresh cache with new config
+    if auth_ok:
+        await manager.refresh()
+
+    if changes:
+        activity_log.log("settings", "Account updated: " + ", ".join(changes))
+
+    return {
+        "success": auth_ok,
+        "changes": changes,
+        "serial_numbers": api.serial_numbers,
+    }
+
+
 # --- Logs API ---
 
 @app.get("/api/logs")
