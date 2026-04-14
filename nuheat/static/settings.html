@@ -280,6 +280,46 @@
         .auth-status.ok { color: #4ecca3; }
         .auth-status.fail { color: #e94560; }
 
+        .user-tag {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: #1a1a2e;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .user-tag .user-name { font-weight: 600; }
+        .user-tag .user-key { color: #555; font-family: monospace; font-size: 12px; }
+        .user-tag .user-actions { display: flex; gap: 8px; }
+
+        .user-tag .user-test-btn {
+            background: none; border: none; color: #4ecca3; font-size: 12px;
+            cursor: pointer; padding: 0;
+        }
+        .user-tag .user-test-btn:hover { text-decoration: underline; }
+
+        .error-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #0f346040;
+        }
+
+        .error-toggle-row:last-child { border-bottom: none; }
+
+        .error-toggle-label {
+            font-size: 13px;
+        }
+
+        .error-toggle-desc {
+            font-size: 11px;
+            color: #555;
+        }
+
         .note {
             font-size: 12px;
             color: #555;
@@ -337,6 +377,38 @@
                 <button class="save-btn" onclick="saveAccount()" id="saveAccountBtn" style="width:100%">Save Account</button>
             </div>
             <div class="changes-list" id="accountChangesList"></div>
+        </div>
+
+        <div class="setting-group">
+            <h2>Push Notifications (Pushover)</h2>
+            <div class="desc">
+                Get push notifications on your phone when errors occur. Requires a free
+                <a href="https://pushover.net" target="_blank" style="color:#4ecca3">Pushover</a> account.
+                Create an application in Pushover to get your App Token, then add users with their User Keys.
+                Each error type can be enabled or disabled independently.
+            </div>
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
+                <span class="setting-label">App Token</span>
+                <input type="text" class="setting-input-wide" id="pushoverToken" placeholder="Enter Pushover application token">
+            </div>
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
+                <span class="setting-label">Users</span>
+                <div id="pushoverUsersList"></div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                    <input type="text" class="setting-input-wide" id="newUserName" placeholder="Name" style="flex:1">
+                    <input type="text" class="setting-input-wide" id="newUserKey" placeholder="User Key" style="flex:2">
+                    <button class="add-btn" onclick="addPushoverUser()">Add</button>
+                </div>
+            </div>
+            <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px;margin-top:12px">
+                <span class="setting-label">Notify On</span>
+                <div id="errorToggles"></div>
+            </div>
+            <div style="margin-top:16px;display:flex;gap:8px">
+                <button class="save-btn" onclick="saveNotifications()" id="saveNotifBtn" style="flex:1">Save Notifications</button>
+                <button class="add-btn" onclick="testNotification()" id="testNotifBtn">Test</button>
+            </div>
+            <div class="changes-list" id="notifChangesList"></div>
         </div>
 
         <div class="setting-group">
@@ -588,6 +660,148 @@
             });
         });
 
+        // --- Notifications ---
+
+        let pushoverUsers = [];
+        let enabledErrors = {};
+        let errorDescriptions = {};
+
+        async function loadNotifications() {
+            try {
+                const resp = await fetch("/api/notifications");
+                if (!resp.ok) throw new Error("Failed");
+                const data = await resp.json();
+
+                document.getElementById("pushoverToken").value = "";
+                document.getElementById("pushoverToken").placeholder = data.app_token_set ? data.app_token : "Enter Pushover application token";
+
+                pushoverUsers = [];
+                // Load full user keys from persistent config (display shows masked)
+                for (const u of data.users) {
+                    pushoverUsers.push({ name: u.name, user_key: u.user_key });
+                }
+                renderPushoverUsers();
+
+                enabledErrors = data.enabled_errors || {};
+                errorDescriptions = data.error_descriptions || {};
+                renderErrorToggles();
+
+                document.getElementById("notifChangesList").innerHTML = "";
+            } catch (e) {
+                // Notifications not configured yet, that's fine
+            }
+        }
+
+        function renderPushoverUsers() {
+            const container = document.getElementById("pushoverUsersList");
+            if (pushoverUsers.length === 0) {
+                container.innerHTML = '<span style="color:#555;font-size:13px">No users configured</span>';
+                return;
+            }
+            container.innerHTML = pushoverUsers.map((u, i) =>
+                '<div class="user-tag">' +
+                '<div><span class="user-name">' + u.name + '</span> ' +
+                '<span class="user-key">' + u.user_key + '</span></div>' +
+                '<div class="user-actions">' +
+                '<span class="serial-remove" onclick="removePushoverUser(' + i + ')">x</span>' +
+                '</div></div>'
+            ).join("");
+        }
+
+        function addPushoverUser() {
+            const name = document.getElementById("newUserName").value.trim();
+            const key = document.getElementById("newUserKey").value.trim();
+            if (!name || !key) {
+                showToast("Enter both name and user key", "error");
+                return;
+            }
+            pushoverUsers.push({ name: name, user_key: key });
+            document.getElementById("newUserName").value = "";
+            document.getElementById("newUserKey").value = "";
+            renderPushoverUsers();
+        }
+
+        function removePushoverUser(index) {
+            pushoverUsers.splice(index, 1);
+            renderPushoverUsers();
+        }
+
+        function renderErrorToggles() {
+            const container = document.getElementById("errorToggles");
+            let html = "";
+            for (const [key, desc] of Object.entries(errorDescriptions)) {
+                const checked = enabledErrors[key] ? "checked" : "";
+                html += '<div class="error-toggle-row">' +
+                    '<div><div class="error-toggle-label">' + key.replace(/_/g, " ") + '</div>' +
+                    '<div class="error-toggle-desc">' + desc + '</div></div>' +
+                    '<label class="toggle-switch"><input type="checkbox" data-error="' + key + '" ' + checked +
+                    ' onchange="toggleError(\'' + key + '\', this.checked)"><span class="toggle-slider"></span></label>' +
+                    '</div>';
+            }
+            container.innerHTML = html;
+        }
+
+        function toggleError(key, enabled) {
+            enabledErrors[key] = enabled;
+        }
+
+        async function saveNotifications() {
+            const btn = document.getElementById("saveNotifBtn");
+            btn.disabled = true;
+
+            const payload = { users: pushoverUsers, enabled_errors: enabledErrors };
+            const token = document.getElementById("pushoverToken").value.trim();
+            if (token) payload.app_token = token;
+
+            try {
+                const resp = await fetch("/api/notifications", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) throw new Error("Failed");
+                const data = await resp.json();
+                if (data.changes.length > 0) {
+                    document.getElementById("notifChangesList").innerHTML =
+                        data.changes.map(c => "<div>" + c + "</div>").join("");
+                    showToast("Notification settings saved");
+                }
+                document.getElementById("pushoverToken").value = "";
+                if (data.notifications.app_token_set) {
+                    document.getElementById("pushoverToken").placeholder = data.notifications.app_token;
+                }
+            } catch (e) {
+                showToast("Failed to save notification settings", "error");
+            }
+
+            btn.disabled = false;
+        }
+
+        async function testNotification() {
+            if (pushoverUsers.length === 0) {
+                showToast("Add a user first", "error");
+                return;
+            }
+            const key = pushoverUsers[0].user_key;
+            if (!key || key.includes("***")) {
+                showToast("Save settings with a valid user key first", "error");
+                return;
+            }
+            const btn = document.getElementById("testNotifBtn");
+            btn.disabled = true;
+            try {
+                const resp = await fetch(`/api/notifications/test?user_key=${encodeURIComponent(key)}`, { method: "POST" });
+                if (!resp.ok) {
+                    const data = await resp.json();
+                    throw new Error(data.detail || "Failed");
+                }
+                showToast("Test notification sent to " + pushoverUsers[0].name);
+            } catch (e) {
+                showToast(e.message || "Test failed", "error");
+            }
+            btn.disabled = false;
+        }
+
         async function loadSettings() {
             try {
                 const resp = await fetch("/api/settings");
@@ -656,6 +870,7 @@
 
         loadSettings();
         loadAccount();
+        loadNotifications();
     </script>
 </body>
 </html>

@@ -9,6 +9,7 @@ from typing import Any
 from nuheat.activity_log import activity_log
 from nuheat.api.base import NuHeatAPI
 from nuheat.config import MIN_SET_INTERVAL_SECONDS, ScheduleMode
+from nuheat.notifications import notifier
 from nuheat.thermostat import Thermostat
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class ThermostatManager:
             activity_log.log("auth", "Authentication successful")
         else:
             activity_log.log("error", "Authentication failed")
+            await notifier.notify("auth_failure", "NuHeat authentication failed")
         return success
 
     async def refresh(self) -> list[Thermostat]:
@@ -59,10 +61,18 @@ class ThermostatManager:
         Called by the background poller. No throttle here since the poller
         already runs on a fixed interval.
         """
+        old_online = {sn: t.online for sn, t in self._cache.items()}
         data_list = await self._api.get_thermostats()
         thermostats = []
         for data in data_list:
             t = Thermostat.from_api(data)
+            # Check if thermostat just went offline
+            if t.serial_number in old_online and old_online[t.serial_number] and not t.online:
+                activity_log.log("error", f"Thermostat {t.name or t.serial_number} went offline",
+                                 serial=t.serial_number)
+                await notifier.notify("thermostat_offline",
+                                      f"{t.name or t.serial_number} went offline",
+                                      f"Serial: {t.serial_number}")
             self._cache[t.serial_number] = t
             thermostats.append(t)
         self._mark_refreshed()
@@ -131,6 +141,9 @@ class ThermostatManager:
         else:
             activity_log.log("error", f"Failed to set temperature on {serial_number}",
                              serial=serial_number, temperature_c=temperature_c)
+            await notifier.notify("write_failure",
+                                  f"Failed to set temperature on {serial_number}",
+                                  f"Target: {temperature_c:.1f}°C")
         return success
 
     async def resume_schedule(self, serial_number: str) -> bool:
@@ -147,6 +160,7 @@ class ThermostatManager:
             # Targeted refresh after write
             await self._refresh_one(serial_number)
         else:
+            await notifier.notify("write_failure", f"Failed to resume schedule for {serial_number}")
             activity_log.log("error", f"Failed to resume schedule for {serial_number}",
                              serial=serial_number)
         return success

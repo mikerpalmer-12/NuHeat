@@ -19,6 +19,7 @@ from nuheat.api.legacy import LegacyAPI
 from nuheat.api.oauth2 import OAuth2API
 from nuheat.config import DEFAULT_POLL_INTERVAL_SECONDS, ScheduleMode
 from nuheat.manager import ThermostatManager
+from nuheat.notifications import notifier
 from nuheat.persistent_config import persistent_config
 
 logger = logging.getLogger(__name__)
@@ -142,8 +143,9 @@ async def poll_loop() -> None:
             if manager:
                 await manager.refresh()
                 logger.debug("Polled %d thermostats", len(manager.get_all_cached()))
-        except Exception:
+        except Exception as e:
             logger.exception("Error during poll")
+            await notifier.notify("poll_failure", "Background poll error", str(e))
         await asyncio.sleep(settings.poll_interval)
 
 
@@ -168,9 +170,12 @@ async def flush_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global manager, _poll_task, _flush_task
+    # Load notification config from persistent storage
+    notifier.load_from_config(persistent_config.get_all())
     manager = create_manager()
     if not await manager.authenticate():
         logger.error("Initial authentication failed")
+        await notifier.notify("auth_failure", "NuHeat authentication failed on startup")
     else:
         await manager.refresh()
     _poll_task = asyncio.create_task(poll_loop())
@@ -178,11 +183,11 @@ async def lifespan(app: FastAPI):
     yield
     _poll_task.cancel()
     _flush_task.cancel()
-    # Flush remaining log entries on shutdown
     count = activity_log.flush()
     if count > 0:
         logger.info("Flushed %d log entries on shutdown", count)
     await manager.close()
+    await notifier.close()
 
 
 app = FastAPI(
@@ -213,6 +218,7 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
         if not rate_limiter.check_write(ip):
             activity_log.log("rate_limit", f"Write rate limit hit by {ip}",
                              ip=ip, path=path)
+            asyncio.create_task(notifier.notify("rate_limit_hit", f"Write rate limit hit by {ip}", f"Path: {path}"))
             return JSONResponse(
                 status_code=429,
                 content={"detail": f"Write rate limit exceeded ({settings.rate_limit_writes}/min). Try again shortly."},
@@ -221,6 +227,7 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
         if not rate_limiter.check_read(ip):
             activity_log.log("rate_limit", f"Read rate limit hit by {ip}",
                              ip=ip, path=path)
+            asyncio.create_task(notifier.notify("rate_limit_hit", f"Read rate limit hit by {ip}", f"Path: {path}"))
             return JSONResponse(
                 status_code=429,
                 content={"detail": f"Read rate limit exceeded ({settings.rate_limit_reads}/min). Try again shortly."},
@@ -438,6 +445,57 @@ async def update_account(req: UpdateAccountRequest):
         "changes": changes,
         "serial_numbers": api.serial_numbers,
     }
+
+
+# --- Notifications API ---
+
+class UpdateNotificationsRequest(BaseModel):
+    app_token: str | None = Field(None, description="Pushover application token")
+    users: list[dict[str, str]] | None = Field(None, description='List of {"name": "...", "user_key": "..."}')
+    enabled_errors: dict[str, bool] | None = Field(None, description="Which error types trigger notifications")
+
+
+@app.get("/api/notifications")
+async def get_notifications():
+    """Get current notification configuration."""
+    return notifier.to_display()
+
+
+@app.put("/api/notifications")
+async def update_notifications(req: UpdateNotificationsRequest):
+    """Update Pushover notification settings."""
+    changes = []
+
+    if req.app_token is not None:
+        notifier.app_token = req.app_token
+        changes.append("app_token updated")
+
+    if req.users is not None:
+        notifier.users = req.users
+        changes.append(f"users: {len(req.users)} configured")
+
+    if req.enabled_errors is not None:
+        notifier.enabled_errors = req.enabled_errors
+        changes.append("enabled_errors updated")
+
+    if changes:
+        persistent_config.update(notifier.to_config())
+        activity_log.log("settings", "Notifications updated: " + ", ".join(changes))
+
+    return {"changes": changes, "notifications": notifier.to_display()}
+
+
+@app.post("/api/notifications/test")
+async def test_notification(
+    user_key: str = Query(..., description="Pushover user key to send test to"),
+):
+    """Send a test notification to verify Pushover is working."""
+    if not notifier.app_token:
+        raise HTTPException(status_code=400, detail="Set an app token first")
+    success = await notifier.send_test(user_key)
+    if not success:
+        raise HTTPException(status_code=500, detail="Test notification failed")
+    return {"success": True, "message": "Test notification sent"}
 
 
 # --- Logs API ---
