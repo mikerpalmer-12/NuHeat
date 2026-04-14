@@ -269,30 +269,6 @@
             cursor: not-allowed;
         }
 
-        .pending-indicator {
-            font-size: 11px;
-            color: #e94560;
-            text-align: center;
-            margin-bottom: 8px;
-            height: 16px;
-        }
-
-        .pending-indicator .countdown-bar {
-            height: 3px;
-            background: #e94560;
-            border-radius: 2px;
-            margin-top: 4px;
-            transition: width 0.1s linear;
-        }
-
-        .sending-indicator {
-            font-size: 11px;
-            color: #4ecca3;
-            text-align: center;
-            margin-bottom: 8px;
-            height: 16px;
-        }
-
         .schedule-info {
             font-size: 12px;
             color: #888;
@@ -377,8 +353,6 @@
         let pendingTargets = {};
         let refreshTimer = null;
         let debounceTimers = {};
-        let countdownIntervals = {};
-        let sendingState = {};
 
         const AUTO_REFRESH_MS = 30000;
         const DEBOUNCE_MS = 2000;
@@ -458,71 +432,24 @@
         }
 
         function scheduleAutoSend(serial) {
-            // Clear any existing debounce timer for this thermostat
             if (debounceTimers[serial]) clearTimeout(debounceTimers[serial]);
-            if (countdownIntervals[serial]) clearInterval(countdownIntervals[serial]);
-
-            // Start countdown display
-            const startTime = Date.now();
-            countdownIntervals[serial] = setInterval(() => {
-                const elapsed = Date.now() - startTime;
-                const remaining = Math.max(0, DEBOUNCE_MS - elapsed);
-                const bar = document.getElementById(`countdown-bar-${serial}`);
-                if (bar) bar.style.width = ((remaining / DEBOUNCE_MS) * 100) + "%";
-                const label = document.getElementById(`pending-label-${serial}`);
-                if (label) label.textContent = "Sending in " + (remaining / 1000).toFixed(1) + "s...";
-            }, 100);
-
-            // Set debounce timer - auto-send after user stops clicking
-            debounceTimers[serial] = setTimeout(() => {
-                clearInterval(countdownIntervals[serial]);
-                delete countdownIntervals[serial];
+            debounceTimers[serial] = setTimeout(async () => {
                 delete debounceTimers[serial];
-                sendTemperature(serial);
+                const targetC = getTargetC(serial);
+                try {
+                    const resp = await fetch(`/api/thermostats/${serial}/temperature`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ temperature_c: targetC }),
+                    });
+                    if (!resp.ok) throw new Error("Failed");
+                    delete pendingTargets[serial];
+                    showToast("Temperature set to " + formatTemp(targetC));
+                    setTimeout(refresh, 2000);
+                } catch (e) {
+                    showToast("Failed to set temperature", "error");
+                }
             }, DEBOUNCE_MS);
-        }
-
-        function cancelPending(serial) {
-            if (debounceTimers[serial]) clearTimeout(debounceTimers[serial]);
-            if (countdownIntervals[serial]) clearInterval(countdownIntervals[serial]);
-            delete debounceTimers[serial];
-            delete countdownIntervals[serial];
-            delete pendingTargets[serial];
-            delete sendingState[serial];
-            render();
-        }
-
-        async function sendTemperature(serial) {
-            const targetC = getTargetC(serial);
-            sendingState[serial] = true;
-            render();
-
-            try {
-                const resp = await fetch(`/api/thermostats/${serial}/temperature`, {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ temperature_c: targetC }),
-                });
-                if (!resp.ok) throw new Error("Failed");
-                delete pendingTargets[serial];
-                delete sendingState[serial];
-                showToast("Temperature set to " + formatTemp(targetC));
-                setTimeout(refresh, 2000);
-            } catch (e) {
-                delete sendingState[serial];
-                showToast("Failed to set temperature", "error");
-            }
-
-            render();
-        }
-
-        async function setTemperature(serial) {
-            // If there's a pending debounce, send immediately
-            if (debounceTimers[serial]) clearTimeout(debounceTimers[serial]);
-            if (countdownIntervals[serial]) clearInterval(countdownIntervals[serial]);
-            delete debounceTimers[serial];
-            delete countdownIntervals[serial];
-            await sendTemperature(serial);
         }
 
         async function resumeSchedule(serial) {
@@ -553,27 +480,12 @@
             const html = '<div class="grid">' + thermostats.map(t => {
                 const serial = t.serial_number;
                 const targetC = getTargetC(serial);
-                const hasPending = pendingTargets[serial] !== undefined;
-                const isSending = sendingState[serial];
-                const isDebouncing = debounceTimers[serial] !== undefined;
                 const heatingBadge = t.heating
                     ? '<span class="badge heating">Heating</span>'
                     : '<span class="badge idle">Idle</span>';
                 const onlineBadge = t.online
                     ? ''
                     : '<span class="badge offline">Offline</span>';
-
-                let statusIndicator = '';
-                if (isSending) {
-                    statusIndicator = '<div class="sending-indicator">Sending...</div>';
-                } else if (isDebouncing) {
-                    statusIndicator = `<div class="pending-indicator">
-                        <span id="pending-label-${serial}">Sending in 2.0s...</span>
-                        <div class="countdown-bar" id="countdown-bar-${serial}" style="width:100%"></div>
-                    </div>`;
-                } else {
-                    statusIndicator = '<div class="pending-indicator"></div>';
-                }
 
                 return `
                     <div class="card">
@@ -600,13 +512,11 @@
                                 <div class="target-label">Target</div>
                             </div>
                             <div class="target-controls">
-                                <button class="temp-btn" onclick="adjustTemp('${serial}', -${tempStep()})"${isSending ? " disabled" : ""}>-</button>
+                                <button class="temp-btn" onclick="adjustTemp('${serial}', -${tempStep()})">-</button>
                                 <div class="target-value">${formatTemp(targetC)}</div>
-                                <button class="temp-btn" onclick="adjustTemp('${serial}', ${tempStep()})"${isSending ? " disabled" : ""}>+</button>
+                                <button class="temp-btn" onclick="adjustTemp('${serial}', ${tempStep()})">+</button>
                             </div>
                         </div>
-
-                        ${statusIndicator}
 
                         <div class="schedule-info">
                             Mode: <span class="mode">${t.schedule_mode_name}</span>
@@ -614,13 +524,9 @@
                         </div>
 
                         <div class="card-actions">
-                            ${hasPending && !isSending
-                                ? `<button class="action-btn primary" onclick="setTemperature('${serial}')">Send Now</button>
-                                   <button class="action-btn secondary" onclick="cancelPending('${serial}')">Cancel</button>`
-                                : `<button class="action-btn secondary" data-resume="${serial}" onclick="resumeSchedule('${serial}')"${isSending ? " disabled" : ""}>
-                                    Resume Schedule
-                                   </button>`
-                            }
+                            <button class="action-btn secondary" data-resume="${serial}" onclick="resumeSchedule('${serial}')">
+                                Resume Schedule
+                            </button>
                         </div>
                     </div>
                 `;
