@@ -28,8 +28,26 @@ _poll_task: asyncio.Task | None = None
 
 # --- Rate Limiter ---
 
-RATE_LIMIT_READS = int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))   # per minute per IP
-RATE_LIMIT_WRITES = int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))  # per minute per IP
+
+class Settings:
+    """Mutable runtime settings."""
+
+    def __init__(self):
+        self.poll_interval = int(os.environ.get("NUHEAT_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS))
+        self.rate_limit_reads = int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))
+        self.rate_limit_writes = int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))
+        self.write_throttle = int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
+
+    def to_dict(self) -> dict:
+        return {
+            "poll_interval": self.poll_interval,
+            "rate_limit_reads": self.rate_limit_reads,
+            "rate_limit_writes": self.rate_limit_writes,
+            "write_throttle": self.write_throttle,
+        }
+
+
+settings = Settings()
 
 
 class RateLimiter:
@@ -45,14 +63,14 @@ class RateLimiter:
 
     def check_read(self, ip: str) -> bool:
         self._read_hits[ip] = self._prune(self._read_hits[ip])
-        if len(self._read_hits[ip]) >= RATE_LIMIT_READS:
+        if len(self._read_hits[ip]) >= settings.rate_limit_reads:
             return False
         self._read_hits[ip].append(time.time())
         return True
 
     def check_write(self, ip: str) -> bool:
         self._write_hits[ip] = self._prune(self._write_hits[ip])
-        if len(self._write_hits[ip]) >= RATE_LIMIT_WRITES:
+        if len(self._write_hits[ip]) >= settings.rate_limit_writes:
             return False
         self._write_hits[ip].append(time.time())
         return True
@@ -105,7 +123,6 @@ def create_manager() -> ThermostatManager:
 
 async def poll_loop() -> None:
     """Background task: the ONLY thing that polls NuHeat on a schedule."""
-    interval = int(os.environ.get("NUHEAT_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS))
     while True:
         try:
             if manager:
@@ -113,7 +130,15 @@ async def poll_loop() -> None:
                 logger.debug("Polled %d thermostats", len(manager.get_all_cached()))
         except Exception:
             logger.exception("Error during poll")
-        await asyncio.sleep(interval)
+        await asyncio.sleep(settings.poll_interval)
+
+
+def restart_poll_loop() -> None:
+    """Restart the poll loop (called after settings change)."""
+    global _poll_task
+    if _poll_task:
+        _poll_task.cancel()
+    _poll_task = asyncio.create_task(poll_loop())
 
 
 @asynccontextmanager
@@ -144,7 +169,7 @@ app = FastAPI(
 async def rate_limit_middleware(request: Request, call_next) -> Response:
     path = request.url.path
     # Skip rate limiting for static pages, docs, and logs
-    if path in ("/", "/api-reference", "/logs", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/"):
+    if path in ("/", "/api-reference", "/logs", "/settings", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/"):
         return await call_next(request)
 
     ip = request.client.host if request.client else "unknown"
@@ -155,7 +180,7 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
                              ip=ip, path=path)
             return JSONResponse(
                 status_code=429,
-                content={"detail": f"Write rate limit exceeded ({RATE_LIMIT_WRITES}/min). Try again shortly."},
+                content={"detail": f"Write rate limit exceeded ({settings.rate_limit_writes}/min). Try again shortly."},
             )
     else:
         if not rate_limiter.check_read(ip):
@@ -163,7 +188,7 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
                              ip=ip, path=path)
             return JSONResponse(
                 status_code=429,
-                content={"detail": f"Read rate limit exceeded ({RATE_LIMIT_READS}/min). Try again shortly."},
+                content={"detail": f"Read rate limit exceeded ({settings.rate_limit_reads}/min). Try again shortly."},
             )
 
     return await call_next(request)
@@ -187,6 +212,62 @@ async def api_reference():
 async def logs_page():
     """Serve the activity logs page."""
     return FileResponse(STATIC_DIR / "logs.html")
+
+
+@app.get("/settings", include_in_schema=False)
+async def settings_page():
+    """Serve the settings page."""
+    return FileResponse(STATIC_DIR / "settings.html")
+
+
+# --- Settings API ---
+
+class UpdateSettingsRequest(BaseModel):
+    poll_interval: int | None = Field(None, ge=30, le=3600, description="Poll interval in seconds (30-3600)")
+    rate_limit_reads: int | None = Field(None, ge=1, le=1000, description="Read rate limit per minute per IP (1-1000)")
+    rate_limit_writes: int | None = Field(None, ge=1, le=100, description="Write rate limit per minute per IP (1-100)")
+    write_throttle: int | None = Field(None, ge=0, le=300, description="Minimum seconds between write commands (0-300)")
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Get current runtime settings."""
+    return settings.to_dict()
+
+
+@app.put("/api/settings")
+async def update_settings(req: UpdateSettingsRequest):
+    """Update runtime settings. Changes take effect immediately."""
+    changes = []
+
+    if req.poll_interval is not None and req.poll_interval != settings.poll_interval:
+        old = settings.poll_interval
+        settings.poll_interval = req.poll_interval
+        restart_poll_loop()
+        changes.append(f"poll_interval: {old}s -> {req.poll_interval}s")
+
+    if req.rate_limit_reads is not None and req.rate_limit_reads != settings.rate_limit_reads:
+        old = settings.rate_limit_reads
+        settings.rate_limit_reads = req.rate_limit_reads
+        changes.append(f"rate_limit_reads: {old} -> {req.rate_limit_reads}/min")
+
+    if req.rate_limit_writes is not None and req.rate_limit_writes != settings.rate_limit_writes:
+        old = settings.rate_limit_writes
+        settings.rate_limit_writes = req.rate_limit_writes
+        changes.append(f"rate_limit_writes: {old} -> {req.rate_limit_writes}/min")
+
+    if req.write_throttle is not None and req.write_throttle != settings.write_throttle:
+        old = settings.write_throttle
+        settings.write_throttle = req.write_throttle
+        if manager:
+            from nuheat import config
+            config.MIN_SET_INTERVAL_SECONDS = req.write_throttle
+        changes.append(f"write_throttle: {old}s -> {req.write_throttle}s")
+
+    if changes:
+        activity_log.log("settings", "Settings updated: " + ", ".join(changes))
+
+    return {"settings": settings.to_dict(), "changes": changes}
 
 
 # --- Logs API ---
@@ -346,9 +427,10 @@ async def health():
         "api_type": os.environ.get("NUHEAT_API_TYPE", "legacy"),
         "last_updated": manager.last_updated if manager else "",
         "rate_limits": {
-            "reads_per_minute": RATE_LIMIT_READS,
-            "writes_per_minute": RATE_LIMIT_WRITES,
+            "reads_per_minute": settings.rate_limit_reads,
+            "writes_per_minute": settings.rate_limit_writes,
         },
+        "poll_interval": settings.poll_interval,
     }
 
 

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NuHeat Settings</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #16213e;
+            padding: 20px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        header h1 { font-size: 22px; font-weight: 600; color: #e94560; }
+
+        .header-links { display: flex; gap: 16px; }
+        .header-links a { color: #4ecca3; text-decoration: none; font-size: 14px; font-weight: 500; }
+        .header-links a:hover { text-decoration: underline; }
+
+        .content {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        .setting-group {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .setting-group h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+
+        .setting-group .desc {
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 16px;
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #0f346040;
+        }
+
+        .setting-row:last-child { border-bottom: none; }
+
+        .setting-label {
+            font-size: 14px;
+            color: #e0e0e0;
+        }
+
+        .setting-label .unit {
+            font-size: 12px;
+            color: #555;
+        }
+
+        .setting-input {
+            width: 100px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 14px;
+            text-align: right;
+            font-family: monospace;
+        }
+
+        .setting-input:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .save-btn {
+            flex: 1;
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            background: #e94560;
+            color: #fff;
+            transition: background 0.2s;
+        }
+
+        .save-btn:hover { background: #d63851; }
+        .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .reset-btn {
+            padding: 12px 20px;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            background: transparent;
+            color: #888;
+            transition: all 0.2s;
+        }
+
+        .reset-btn:hover { border-color: #1a4a8a; color: #e0e0e0; }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            z-index: 1000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.success { background: #4ecca3; color: #1a1a2e; }
+        .toast.error { background: #e94560; color: #fff; }
+
+        .changes-list {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #4ecca3;
+        }
+
+        .changes-list div {
+            padding: 4px 0;
+            font-family: monospace;
+        }
+
+        .note {
+            font-size: 12px;
+            color: #555;
+            margin-top: 16px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 480px) {
+            .content { padding: 20px 16px; }
+            header h1 { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Settings</h1>
+        <div class="header-links">
+            <a href="/">Dashboard</a>
+            <a href="/api-reference">API</a>
+            <a href="/logs">Logs</a>
+        </div>
+    </header>
+
+    <div class="content">
+        <div class="setting-group">
+            <h2>Background Polling</h2>
+            <div class="desc">How often the server fetches fresh data from NuHeat.</div>
+            <div class="setting-row">
+                <span class="setting-label">Poll interval <span class="unit">(seconds)</span></span>
+                <input type="number" class="setting-input" id="pollInterval" min="30" max="3600" step="30">
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <h2>Rate Limits</h2>
+            <div class="desc">Maximum requests per minute per IP address.</div>
+            <div class="setting-row">
+                <span class="setting-label">Read limit <span class="unit">(per min)</span></span>
+                <input type="number" class="setting-input" id="rateLimitReads" min="1" max="1000">
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Write limit <span class="unit">(per min)</span></span>
+                <input type="number" class="setting-input" id="rateLimitWrites" min="1" max="100">
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <h2>Write Throttle</h2>
+            <div class="desc">Minimum time between temperature change commands sent to NuHeat.</div>
+            <div class="setting-row">
+                <span class="setting-label">Throttle delay <span class="unit">(seconds)</span></span>
+                <input type="number" class="setting-input" id="writeThrottle" min="0" max="300">
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="save-btn" id="saveBtn" onclick="saveSettings()">Save Changes</button>
+            <button class="reset-btn" onclick="loadSettings()">Reset</button>
+        </div>
+
+        <div class="changes-list" id="changesList"></div>
+
+        <div class="note">
+            Changes take effect immediately without restarting the container.
+            They revert to .env defaults on restart.
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let original = {};
+
+        function showToast(message, type = "success") {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.className = "toast " + type + " show";
+            setTimeout(() => { toast.className = "toast " + type; }, 3000);
+        }
+
+        async function loadSettings() {
+            try {
+                const resp = await fetch("/api/settings");
+                if (!resp.ok) throw new Error("Failed");
+                const data = await resp.json();
+                original = { ...data };
+
+                document.getElementById("pollInterval").value = data.poll_interval;
+                document.getElementById("rateLimitReads").value = data.rate_limit_reads;
+                document.getElementById("rateLimitWrites").value = data.rate_limit_writes;
+                document.getElementById("writeThrottle").value = data.write_throttle;
+                document.getElementById("changesList").innerHTML = "";
+            } catch (e) {
+                showToast("Failed to load settings", "error");
+            }
+        }
+
+        async function saveSettings() {
+            const btn = document.getElementById("saveBtn");
+            btn.disabled = true;
+
+            const payload = {};
+            const pi = parseInt(document.getElementById("pollInterval").value);
+            const rlr = parseInt(document.getElementById("rateLimitReads").value);
+            const rlw = parseInt(document.getElementById("rateLimitWrites").value);
+            const wt = parseInt(document.getElementById("writeThrottle").value);
+
+            if (pi !== original.poll_interval) payload.poll_interval = pi;
+            if (rlr !== original.rate_limit_reads) payload.rate_limit_reads = rlr;
+            if (rlw !== original.rate_limit_writes) payload.rate_limit_writes = rlw;
+            if (wt !== original.write_throttle) payload.write_throttle = wt;
+
+            if (Object.keys(payload).length === 0) {
+                showToast("No changes to save");
+                btn.disabled = false;
+                return;
+            }
+
+            try {
+                const resp = await fetch("/api/settings", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (!resp.ok) throw new Error("Failed");
+                const data = await resp.json();
+                original = { ...data.settings };
+
+                if (data.changes.length > 0) {
+                    document.getElementById("changesList").innerHTML =
+                        data.changes.map(c => "<div>" + c + "</div>").join("");
+                    showToast("Settings saved");
+                }
+            } catch (e) {
+                showToast("Failed to save settings", "error");
+            }
+
+            btn.disabled = false;
+        }
+
+        loadSettings();
+    </script>
+</body>
+</html>
