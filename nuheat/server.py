@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 manager: ThermostatManager | None = None
 _poll_task: asyncio.Task | None = None
+_flush_task: asyncio.Task | None = None
 
 
 # --- Rate Limiter ---
@@ -37,6 +38,7 @@ class Settings:
         self.rate_limit_reads = int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))
         self.rate_limit_writes = int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))
         self.write_throttle = int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
+        self.debug_mode = activity_log.debug_mode
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +46,7 @@ class Settings:
             "rate_limit_reads": self.rate_limit_reads,
             "rate_limit_writes": self.rate_limit_writes,
             "write_throttle": self.write_throttle,
+            "debug_mode": self.debug_mode,
         }
 
 
@@ -141,17 +144,33 @@ def restart_poll_loop() -> None:
     _poll_task = asyncio.create_task(poll_loop())
 
 
+async def flush_loop() -> None:
+    """Background task: periodically flush activity log to disk."""
+    while True:
+        await asyncio.sleep(30)  # check every 30s
+        if activity_log.should_flush():
+            count = activity_log.flush()
+            if count > 0:
+                logger.debug("Flushed %d log entries to disk", count)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global manager, _poll_task
+    global manager, _poll_task, _flush_task
     manager = create_manager()
     if not await manager.authenticate():
         logger.error("Initial authentication failed")
     else:
         await manager.refresh()
     _poll_task = asyncio.create_task(poll_loop())
+    _flush_task = asyncio.create_task(flush_loop())
     yield
     _poll_task.cancel()
+    _flush_task.cancel()
+    # Flush remaining log entries on shutdown
+    count = activity_log.flush()
+    if count > 0:
+        logger.info("Flushed %d log entries on shutdown", count)
     await manager.close()
 
 
@@ -227,6 +246,7 @@ class UpdateSettingsRequest(BaseModel):
     rate_limit_reads: int | None = Field(None, ge=1, le=1000, description="Read rate limit per minute per IP (1-1000)")
     rate_limit_writes: int | None = Field(None, ge=1, le=100, description="Write rate limit per minute per IP (1-100)")
     write_throttle: int | None = Field(None, ge=0, le=300, description="Minimum seconds between write commands (0-300)")
+    debug_mode: bool | None = Field(None, description="Write every log entry to disk immediately")
 
 
 @app.get("/api/settings")
@@ -263,6 +283,12 @@ async def update_settings(req: UpdateSettingsRequest):
             from nuheat import config
             config.MIN_SET_INTERVAL_SECONDS = req.write_throttle
         changes.append(f"write_throttle: {old}s -> {req.write_throttle}s")
+
+    if req.debug_mode is not None and req.debug_mode != settings.debug_mode:
+        old = settings.debug_mode
+        settings.debug_mode = req.debug_mode
+        activity_log.debug_mode = req.debug_mode
+        changes.append(f"debug_mode: {old} -> {req.debug_mode}")
 
     if changes:
         activity_log.log("settings", "Settings updated: " + ", ".join(changes))

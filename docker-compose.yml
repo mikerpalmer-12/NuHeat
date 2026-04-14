@@ -7,9 +7,14 @@ services:
       - "8777:8080"
     env_file:
       - .env
+    volumes:
+      - nuheat-logs:/app/logs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  nuheat-logs:

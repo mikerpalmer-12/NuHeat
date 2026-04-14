@@ -129,6 +129,39 @@
 
         .reset-btn:hover { border-color: #1a4a8a; color: #e0e0e0; }
 
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 26px;
+        }
+
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #0f3460;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+
+        .toggle-slider:before {
+            content: "";
+            position: absolute;
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: #888;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+
+        .toggle-switch input:checked + .toggle-slider { background: #e945604d; }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(22px); background: #e94560; }
+
         .toast {
             position: fixed;
             bottom: 24px;
@@ -264,6 +297,28 @@
             </div>
         </div>
 
+        <div class="setting-group">
+            <h2>Debug Mode</h2>
+            <div class="desc">
+                In normal mode, log entries are held in memory and flushed to disk every 5 minutes.
+                If the system crashes, you lose at most 5 minutes of logs. In debug mode, every
+                log entry is written to disk immediately -- so even if the system crashes, you
+                have a complete log up to the moment of failure. Use this when you're actively
+                troubleshooting an issue, then turn it off when done.
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Debug logging</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="debugMode">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="setting-example">
+                <strong>Off</strong> = buffered writes every 5 min, ~288 SD writes/day (default, SD-friendly)<br>
+                <strong>On</strong> = immediate writes, many more SD writes (use only when troubleshooting)
+            </div>
+        </div>
+
         <div class="actions">
             <button class="save-btn" id="saveBtn" onclick="saveSettings()">Save Changes</button>
             <button class="reset-btn" onclick="loadSettings()">Reset</button>
@@ -300,6 +355,7 @@
                 document.getElementById("rateLimitReads").value = data.rate_limit_reads;
                 document.getElementById("rateLimitWrites").value = data.rate_limit_writes;
                 document.getElementById("writeThrottle").value = data.write_throttle;
+                document.getElementById("debugMode").checked = data.debug_mode;
                 document.getElementById("changesList").innerHTML = "";
             } catch (e) {
                 showToast("Failed to load settings", "error");
@@ -315,11 +371,13 @@
             const rlr = parseInt(document.getElementById("rateLimitReads").value);
             const rlw = parseInt(document.getElementById("rateLimitWrites").value);
             const wt = parseInt(document.getElementById("writeThrottle").value);
+            const dm = document.getElementById("debugMode").checked;
 
             if (pi !== original.poll_interval) payload.poll_interval = pi;
             if (rlr !== original.rate_limit_reads) payload.rate_limit_reads = rlr;
             if (rlw !== original.rate_limit_writes) payload.rate_limit_writes = rlw;
             if (wt !== original.write_throttle) payload.write_throttle = wt;
+            if (dm !== original.debug_mode) payload.debug_mode = dm;
 
             if (Object.keys(payload).length === 0) {
                 showToast("No changes to save");
