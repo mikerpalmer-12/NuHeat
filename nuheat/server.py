@@ -5,7 +5,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from nuheat.api.legacy import LegacyAPI
@@ -186,3 +186,85 @@ async def health():
         "thermostats_cached": len(cached),
         "api_type": os.environ.get("NUHEAT_API_TYPE", "legacy"),
     }
+
+
+# --- Query String Endpoints ---
+# Simple GET-only interface for easy integration with systems that can't
+# send JSON bodies (webhooks, browser bookmarks, curl one-liners, IoT devices).
+#
+# Examples:
+#   GET /qs/status
+#   GET /qs/status?serial=ABCDEF
+#   GET /qs/set?serial=ABCDEF&temp_f=72
+#   GET /qs/set?serial=ABCDEF&temp_c=22.5&hold_until=2025-12-01T08:00:00
+#   GET /qs/resume?serial=ABCDEF
+
+@app.get("/qs/status")
+async def qs_status(
+    serial: str | None = Query(None, description="Thermostat serial number (omit for all)"),
+):
+    """Get thermostat status via query string.
+
+    Omit `serial` to list all thermostats. Provide `serial` for a single one.
+    """
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+
+    if serial:
+        thermostat = await manager.get_thermostat(serial)
+        if not thermostat:
+            raise HTTPException(status_code=404, detail=f"Thermostat {serial} not found")
+        return thermostat.to_dict()
+    else:
+        thermostats = await manager.refresh()
+        return [t.to_dict() for t in thermostats]
+
+
+@app.get("/qs/set")
+async def qs_set(
+    serial: str = Query(..., description="Thermostat serial number"),
+    temp_c: float | None = Query(None, description="Target temperature in Celsius"),
+    temp_f: float | None = Query(None, description="Target temperature in Fahrenheit"),
+    hold_until: str | None = Query(None, description="ISO datetime for temporary hold"),
+):
+    """Set thermostat temperature via query string.
+
+    Provide `temp_c` or `temp_f`. Omit `hold_until` for a permanent hold.
+    """
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+
+    target_c = temp_c
+    if target_c is None and temp_f is not None:
+        target_c = (temp_f - 32) * 5 / 9
+    if target_c is None:
+        raise HTTPException(status_code=400, detail="Provide temp_c or temp_f")
+
+    success = await manager.set_temperature(serial, target_c, hold_until)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to set temperature")
+
+    temp_f_display = target_c * 9 / 5 + 32
+    return {
+        "success": True,
+        "message": f"Temperature set to {target_c:.1f}°C / {temp_f_display:.1f}°F",
+        "serial": serial,
+        "target_temperature_c": round(target_c, 1),
+        "target_temperature_f": round(temp_f_display, 1),
+        "hold_until": hold_until,
+    }
+
+
+@app.get("/qs/resume")
+async def qs_resume(
+    serial: str = Query(..., description="Thermostat serial number"),
+):
+    """Resume the programmed schedule via query string."""
+    if not manager:
+        raise HTTPException(status_code=503, detail="Manager not initialized")
+
+    success = await manager.resume_schedule(serial)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to resume schedule")
+
+    return {"success": True, "message": "Schedule resumed", "serial": serial}
