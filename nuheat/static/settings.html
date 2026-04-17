@@ -529,32 +529,6 @@
             </div>
         </div>
 
-        <div class="setting-group">
-            <h2>NuHeat API Call Logging</h2>
-            <div class="desc">
-                When enabled, every outbound call this server makes to the NuHeat API is logged --
-                including the HTTP method, path, thermostat serial number, response status, and
-                how long the call took. This is useful for diagnosing connectivity issues with
-                NuHeat (slow responses, timeouts, or one thermostat consistently failing while
-                others succeed). Each poll cycle makes one call per thermostat, so expect several
-                entries per poll interval. Turn off when not actively troubleshooting.
-            </div>
-            <div class="setting-row">
-                <span class="setting-label">NuHeat API call logging</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="nuheatApiLogging">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div class="setting-example">
-                <strong>Off</strong> = only poll summaries and errors are logged (default)<br>
-                <strong>On</strong> = every NuHeat API call is logged, e.g.:<br>
-                &nbsp;&nbsp;NuHeat API GET /thermostat -> 200 (145ms) [ABC123]<br>
-                &nbsp;&nbsp;NuHeat API GET /thermostat -> 200 (162ms) [DEF456]<br>
-                &nbsp;&nbsp;NuHeat API POST /thermostat -> 200 (203ms) [ABC123]
-            </div>
-        </div>
-
         <div class="actions">
             <button class="save-btn" id="saveBtn" onclick="saveSettings()">Save Changes</button>
             <button class="reset-btn" onclick="loadSettings()">Reset</button>
@@ -843,7 +817,6 @@
                 document.getElementById("writeThrottle").value = data.write_throttle;
                 document.getElementById("debugMode").checked = data.debug_mode;
                 document.getElementById("apiLogging").checked = data.api_logging;
-                document.getElementById("nuheatApiLogging").checked = data.nuheat_api_logging;
                 document.getElementById("changesList").innerHTML = "";
             } catch (e) {
                 showToast("Failed to load settings", "error");
@@ -861,7 +834,6 @@
             const wt = parseInt(document.getElementById("writeThrottle").value);
             const dm = document.getElementById("debugMode").checked;
             const al = document.getElementById("apiLogging").checked;
-            const nal = document.getElementById("nuheatApiLogging").checked;
 
             if (pi !== original.poll_interval) payload.poll_interval = pi;
             if (rlr !== original.rate_limit_reads) payload.rate_limit_reads = rlr;
@@ -869,7 +841,6 @@
             if (wt !== original.write_throttle) payload.write_throttle = wt;
             if (dm !== original.debug_mode) payload.debug_mode = dm;
             if (al !== original.api_logging) payload.api_logging = al;
-            if (nal !== original.nuheat_api_logging) payload.nuheat_api_logging = nal;
 
             if (Object.keys(payload).length === 0) {
                 showToast("No changes to save");

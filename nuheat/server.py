@@ -43,10 +43,8 @@ class Settings:
         self.write_throttle = pc.get("write_throttle") if pc.get("write_throttle") is not None else int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
         self.debug_mode = pc.get("debug_mode") if pc.get("debug_mode") is not None else activity_log.debug_mode
         self.api_logging = pc.get("api_logging", False)
-        self.nuheat_api_logging = pc.get("nuheat_api_logging", False)
-        # Apply flags from persisted config
+        # Apply debug mode from persisted config
         activity_log.debug_mode = self.debug_mode
-        activity_log.nuheat_api_logging = self.nuheat_api_logging
 
     def to_dict(self) -> dict:
         return {
@@ -56,7 +54,6 @@ class Settings:
             "write_throttle": self.write_throttle,
             "debug_mode": self.debug_mode,
             "api_logging": self.api_logging,
-            "nuheat_api_logging": self.nuheat_api_logging,
         }
 
 
@@ -296,7 +293,6 @@ class UpdateSettingsRequest(BaseModel):
     write_throttle: int | None = Field(None, ge=0, le=300, description="Minimum seconds between write commands (0-300)")
     debug_mode: bool | None = Field(None, description="Write every log entry to disk immediately")
     api_logging: bool | None = Field(None, description="Log every API request with method, path, IP, status, and duration")
-    nuheat_api_logging: bool | None = Field(None, description="Log every outbound call to the NuHeat API with timing")
 
 
 @app.get("/api/settings")
@@ -345,12 +341,6 @@ async def update_settings(req: UpdateSettingsRequest):
         settings.api_logging = req.api_logging
         changes.append(f"api_logging: {old} -> {req.api_logging}")
 
-    if req.nuheat_api_logging is not None and req.nuheat_api_logging != settings.nuheat_api_logging:
-        old = settings.nuheat_api_logging
-        settings.nuheat_api_logging = req.nuheat_api_logging
-        activity_log.nuheat_api_logging = req.nuheat_api_logging
-        changes.append(f"nuheat_api_logging: {old} -> {req.nuheat_api_logging}")
-
     if changes:
         activity_log.log("settings", "Settings updated: " + ", ".join(changes))
         # Persist all runtime settings
@@ -361,7 +351,6 @@ async def update_settings(req: UpdateSettingsRequest):
             "write_throttle": settings.write_throttle,
             "debug_mode": settings.debug_mode,
             "api_logging": settings.api_logging,
-            "nuheat_api_logging": settings.nuheat_api_logging,
         })
 
     return {"settings": settings.to_dict(), "changes": changes}

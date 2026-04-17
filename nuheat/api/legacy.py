@@ -57,13 +57,12 @@ class LegacyAPI(NuHeatAPI):
                 status = resp.status
                 duration_ms = round((time.time() - start) * 1000)
                 body_text = await resp.text()
-                if activity_log.nuheat_api_logging:
-                    activity_log.log(
-                        "nuheat_api",
-                        f"NuHeat API POST /authenticate/user -> {status} ({duration_ms}ms)",
-                        method="POST", path="authenticate/user",
-                        duration_ms=duration_ms, status=status,
-                    )
+                activity_log.log(
+                    "nuheat_api",
+                    f"NuHeat API POST /authenticate/user -> {status} ({duration_ms}ms)",
+                    method="POST", path="authenticate/user",
+                    duration_ms=duration_ms, status=status,
+                )
                 if status != 200:
                     logger.error("Authentication failed with status %d", status)
                     activity_log.log(
@@ -145,19 +144,18 @@ class LegacyAPI(NuHeatAPI):
 
                 result = await resp.json(content_type=None)
 
-                if activity_log.nuheat_api_logging:
-                    msg = f"NuHeat API {method} /{path} -> 200 ({duration_ms}ms)"
-                    if serial:
-                        msg += f" [{serial}]"
-                    activity_log.log(
-                        "nuheat_api",
-                        msg,
-                        method=method,
-                        path=path,
-                        serial=serial,
-                        duration_ms=duration_ms,
-                        status=200,
-                    )
+                msg = f"NuHeat API {method} /{path} -> 200 ({duration_ms}ms)"
+                if serial:
+                    msg += f" [{serial}]"
+                activity_log.log(
+                    "nuheat_api",
+                    msg,
+                    method=method,
+                    path=path,
+                    serial=serial,
+                    duration_ms=duration_ms,
+                    status=200,
+                )
 
                 return result
         except aiohttp.ClientError as e:

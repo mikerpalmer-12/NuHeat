@@ -247,13 +247,18 @@ class ThermostatManager:
                 self._cache[serial_number].schedule_mode = mode
                 self._cache[serial_number].schedule_mode_name = mode.name.replace("_", " ").title()
             logger.info("Set %s to %.1f°C", serial_number, temperature_c)
-            activity_log.log("write", f"Set {serial_number} to {temperature_c:.1f}°C ({duration_ms}ms)",
-                             serial=serial_number, temperature_c=temperature_c,
+            temp_f = temperature_c * 9 / 5 + 32
+            activity_log.log("write", f"Set {serial_number} to {temperature_c:.1f}°C / {temp_f:.1f}°F ({duration_ms}ms)",
+                             serial=serial_number,
+                             temperature_c=round(temperature_c, 2),
+                             temperature_f=round(temp_f, 1),
                              mode=mode.name, hold_until=hold_until, duration_ms=duration_ms)
             await self._refresh_one(serial_number)
         else:
             activity_log.log("error", f"Failed to set temperature on {serial_number} ({duration_ms}ms)",
-                             serial=serial_number, temperature_c=temperature_c, duration_ms=duration_ms)
+                             serial=serial_number,
+                             temperature_c=round(temperature_c, 2),
+                             duration_ms=duration_ms)
             await notifier.notify("write_failure",
                                   f"Failed to set temperature on {serial_number}",
                                   f"Target: {temperature_c:.1f}°C")
