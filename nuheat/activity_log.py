@@ -56,12 +56,21 @@ class ActivityLog:
         self._log_dir = Path(os.environ.get("NUHEAT_LOG_DIR", DEFAULT_LOG_DIR))
         self._flush_interval = int(os.environ.get("NUHEAT_LOG_FLUSH_INTERVAL", DEFAULT_FLUSH_INTERVAL))
         self._debug_mode = os.environ.get("NUHEAT_DEBUG_LOG", "").lower() in ("1", "true", "yes")
+        self._nuheat_api_logging = False
         self._last_flush_time: float = 0
 
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = self._log_dir / "activity.jsonl"
 
         self._restore_from_disk()
+
+    @property
+    def nuheat_api_logging(self) -> bool:
+        return self._nuheat_api_logging
+
+    @nuheat_api_logging.setter
+    def nuheat_api_logging(self, value: bool) -> None:
+        self._nuheat_api_logging = value
 
     @property
     def debug_mode(self) -> bool:

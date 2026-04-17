@@ -127,6 +127,7 @@
         .log-category.refresh { background: #a855f71a; color: #a855f7; }
         .log-category.error { background: #e945601a; color: #e94560; }
         .log-category.api_request { background: #8b5cf61a; color: #8b5cf6; }
+        .log-category.nuheat_api { background: #f59e0b1a; color: #f59e0b; }
         .log-category.settings { background: #06b6d41a; color: #06b6d4; }
 
         .log-message {
@@ -182,6 +183,7 @@
         <button class="filter-btn" data-category="refresh" onclick="setFilter(this, 'refresh')">Refresh</button>
         <button class="filter-btn" data-category="error" onclick="setFilter(this, 'error')">Error</button>
         <button class="filter-btn" data-category="api_request" onclick="setFilter(this, 'api_request')">API Request</button>
+        <button class="filter-btn" data-category="nuheat_api" onclick="setFilter(this, 'nuheat_api')">NuHeat API</button>
         <button class="filter-btn" data-category="settings" onclick="setFilter(this, 'settings')">Settings</button>
         <label class="auto-refresh-label">
             <input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()">
