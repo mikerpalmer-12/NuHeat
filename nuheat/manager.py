@@ -287,7 +287,7 @@ class ThermostatManager:
     async def _refresh_one(self, serial_number: str) -> None:
         """Refresh a single thermostat from NuHeat after a write."""
         try:
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
             data = await self._api.get_thermostat(serial_number)
             if data:
                 self._cache[serial_number] = Thermostat.from_api(data)
