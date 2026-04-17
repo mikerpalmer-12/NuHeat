@@ -6,6 +6,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from nuheat.activity_log import activity_log
 from nuheat.api.base import NuHeatAPI
 from nuheat.config import (
     LEGACY_AUTH_ENDPOINT,
@@ -49,14 +50,38 @@ class LegacyAPI(NuHeatAPI):
             "Password": self._password,
             "application": "0",
         })
-        async with http.post(LEGACY_AUTH_ENDPOINT, data=data) as resp:
-            if resp.status != 200:
-                logger.error("Authentication failed with status %d", resp.status)
-                return False
-            result = await resp.json()
+        try:
+            async with http.post(LEGACY_AUTH_ENDPOINT, data=data) as resp:
+                status = resp.status
+                body_text = await resp.text()
+                if status != 200:
+                    logger.error("Authentication failed with status %d", status)
+                    activity_log.log(
+                        "error",
+                        f"Auth HTTP {status} from NuHeat",
+                        http_status=status,
+                        body_preview=body_text[:200],
+                    )
+                    return False
+                try:
+                    result = await resp.json(content_type=None)
+                except Exception:
+                    activity_log.log(
+                        "error",
+                        "Auth response was not JSON",
+                        body_preview=body_text[:200],
+                    )
+                    return False
+        except aiohttp.ClientError as e:
+            activity_log.log("error", f"Auth network error: {type(e).__name__}: {e}",
+                             exception=type(e).__name__)
+            return False
 
         if result.get("ErrorCode", -1) != 0 or not result.get("SessionId"):
-            logger.error("Authentication failed: ErrorCode=%s", result.get("ErrorCode"))
+            ec = result.get("ErrorCode")
+            logger.error("Authentication failed: ErrorCode=%s", ec)
+            activity_log.log("error", f"Auth rejected by NuHeat (ErrorCode={ec})",
+                             error_code=ec)
             return False
 
         self._session_id = result["SessionId"]
@@ -75,15 +100,49 @@ class LegacyAPI(NuHeatAPI):
         sep = "&" if "?" in url else "?"
         auth_url = f"{url}{sep}sessionid={self._session_id}"
 
-        async with http.request(method, auth_url, **kwargs) as resp:
-            if resp.status == 401 and retry:
-                logger.info("Session expired, re-authenticating...")
-                self._session_id = None
-                return await self._request(method, url, retry=False, **kwargs)
-            if resp.status != 200:
-                logger.error("Request %s %s failed with status %d", method, url, resp.status)
-                return None
-            return await resp.json()
+        try:
+            async with http.request(method, auth_url, **kwargs) as resp:
+                status = resp.status
+                if status == 401 and retry:
+                    logger.info("Session expired, re-authenticating...")
+                    activity_log.log("auth", "Session expired (HTTP 401) - re-authenticating")
+                    self._session_id = None
+                    return await self._request(method, url, retry=False, **kwargs)
+                if status != 200:
+                    body_text = await resp.text()
+                    logger.error("Request %s %s failed with status %d", method, url, status)
+                    # Extract just the path for the log (no sessionid)
+                    path = url.split("?")[0].replace("https://mynuheat.com/api/", "")
+                    activity_log.log(
+                        "error",
+                        f"NuHeat API {method} /{path} returned HTTP {status}",
+                        http_status=status,
+                        method=method,
+                        path=path,
+                        body_preview=body_text[:200],
+                    )
+                    return None
+                return await resp.json(content_type=None)
+        except aiohttp.ClientError as e:
+            path = url.split("?")[0].replace("https://mynuheat.com/api/", "")
+            activity_log.log(
+                "error",
+                f"NuHeat API network error: {type(e).__name__}: {e}",
+                method=method,
+                path=path,
+                exception=type(e).__name__,
+            )
+            return None
+        except Exception as e:
+            path = url.split("?")[0].replace("https://mynuheat.com/api/", "")
+            activity_log.log(
+                "error",
+                f"NuHeat API unexpected error: {type(e).__name__}: {e}",
+                method=method,
+                path=path,
+                exception=type(e).__name__,
+            )
+            return None
 
     async def get_thermostat(self, serial_number: str) -> dict[str, Any]:
         url = f"{LEGACY_THERMOSTAT_ENDPOINT}?serialnumber={serial_number}"
