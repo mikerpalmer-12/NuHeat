@@ -8,34 +8,62 @@ from typing import Any
 
 from nuheat.activity_log import activity_log
 from nuheat.api.base import NuHeatAPI
-from nuheat.config import MIN_SET_INTERVAL_SECONDS, ScheduleMode
+from nuheat.config import (
+    SCHEDULE_MODE_NAMES,
+    UPSTREAM_RETRY_DELAY_SECONDS,
+    VERIFY_DELAY_SECONDS,
+    VERIFY_RETRY_DELAY_SECONDS,
+    WRITE_DEBOUNCE_SECONDS,
+    ScheduleMode,
+)
 from nuheat.notifications import notifier
 from nuheat.thermostat import Thermostat
 
 logger = logging.getLogger(__name__)
 
 MIN_REFRESH_INTERVAL_SECONDS = 60
+TEMP_MATCH_TOLERANCE_C = 0.3  # NuHeat round-trips through an integer format
+
+
+def _mode_name(mode: ScheduleMode) -> str:
+    return SCHEDULE_MODE_NAMES.get(mode, mode.name.replace("_", " ").title())
 
 
 class ThermostatManager:
     """Manages thermostats through any NuHeatAPI implementation.
 
-    All reads are served from an in-memory cache that is updated only by:
+    All reads are served from an in-memory cache that is updated by:
       1. The background poller (every NUHEAT_POLL_INTERVAL seconds)
-      2. A targeted refresh after a successful write
+      2. Optimistic updates on write entry, then verification reads at
+         +15s (and +35s on first mismatch)
       3. An explicit force_refresh() call (throttled to once per 60s)
+
+    Writes are debounced by 2s with last-write-wins per serial. The
+    upstream API call fires immediately after the debounce window. A
+    verify chain reads the thermostat 15s later to confirm propagation,
+    re-verifies once at +20s on mismatch, and gives up after that.
+    Upstream POST failures retry once after 20s. The per-thermostat
+    `_writeStatus` field surfaces all of this to API consumers.
     """
 
     def __init__(self, api: NuHeatAPI):
         self._api = api
         self._cache: dict[str, Thermostat] = {}
-        self._last_set_time: float = 0
         self._last_refresh_time: float = 0
         self._last_refresh_iso: str = ""
         # Per-thermostat tracking for detailed offline diagnostics
         self._online_since: dict[str, float] = {}
         self._last_seen: dict[str, float] = {}
         self._offline_count: dict[str, int] = {}
+
+        # Write pipeline state (per-serial, last-write-wins)
+        self._pending_writes: dict[str, dict] = {}
+        self._versions: dict[str, int] = {}
+        self._write_status: dict[str, dict] = {}
+        # Serials with a verify chain currently in flight — background poll
+        # leaves their cache entry untouched so it can't trample the
+        # optimistic value before verification completes.
+        self._verify_in_flight: set[str] = set()
 
     @property
     def api(self) -> NuHeatAPI:
@@ -64,9 +92,13 @@ class ThermostatManager:
         return success
 
     async def refresh(self) -> list[Thermostat]:
-        """Fetch all thermostats from NuHeat and update the cache."""
+        """Fetch all thermostats from NuHeat and update the cache.
+
+        Thermostats with a verify chain in flight are NOT overwritten —
+        their optimistic cache entry stays in place until the verify chain
+        either confirms the write or reconciles to upstream state.
+        """
         start = time.time()
-        expected_count = len(self._cache) or None
 
         try:
             data_list = await self._api.get_thermostats()
@@ -87,7 +119,6 @@ class ThermostatManager:
             missing_serials.discard(sn)
             old = self._cache.get(sn)
 
-            # Track last-seen and online-since
             self._last_seen[sn] = now
 
             if t.online and sn not in self._online_since:
@@ -95,9 +126,7 @@ class ThermostatManager:
             if not t.online:
                 self._offline_count[sn] = self._offline_count.get(sn, 0) + 1
 
-            # Transition detection
             if old is not None:
-                # Online -> Offline
                 if old.online and not t.online:
                     online_duration = now - self._online_since.get(sn, now)
                     online_duration_min = round(online_duration / 60)
@@ -122,7 +151,6 @@ class ThermostatManager:
                         f"Last temp: {old.current_temperature_c:.1f}°C, Heating: {old.heating}",
                     )
 
-                # Offline -> Online
                 if not old.online and t.online:
                     self._online_since[sn] = now
                     activity_log.log(
@@ -136,7 +164,6 @@ class ThermostatManager:
                         firmware=t.firmware,
                     )
 
-                # Heating state changed while online
                 if old.online and t.online and old.heating != t.heating:
                     activity_log.log(
                         "poll",
@@ -148,7 +175,6 @@ class ThermostatManager:
                     )
 
             else:
-                # First time seeing this thermostat
                 status = "online" if t.online else "OFFLINE"
                 activity_log.log(
                     "poll",
@@ -163,10 +189,15 @@ class ThermostatManager:
                     mode=t.schedule_mode_name,
                 )
 
-            self._cache[sn] = t
-            thermostats.append(t)
+            # Skip overwriting cache for serials with verify in flight —
+            # the optimistic value is more accurate than what NuHeat would
+            # return mid-propagation.
+            if sn in self._verify_in_flight:
+                thermostats.append(self._cache.get(sn) or t)
+            else:
+                self._cache[sn] = t
+                thermostats.append(t)
 
-        # Detect thermostats that didn't come back in this poll (API didn't return them at all)
         for sn in missing_serials:
             last_seen_ago = round(now - self._last_seen.get(sn, now))
             old = self._cache.get(sn)
@@ -180,7 +211,6 @@ class ThermostatManager:
 
         self._mark_refreshed()
 
-        # Summary poll log
         online = sum(1 for t in thermostats if t.online)
         offline = len(thermostats) - online
         activity_log.log(
@@ -215,87 +245,323 @@ class ThermostatManager:
         """Get all thermostats from cache. Never hits NuHeat."""
         return list(self._cache.values())
 
+    def get_write_status(self, serial_number: str) -> dict:
+        """Return the current write-status object for a thermostat.
+
+        Default is `state="ok"` for any serial that hasn't been written
+        to since startup.
+        """
+        return self._write_status.get(serial_number) or {
+            "state": "ok",
+            "lastError": None,
+            "updatedAt": None,
+        }
+
+    # --- Write API (returns immediately; pipeline runs in background) ---
+
     async def set_temperature(
         self,
         serial_number: str,
         temperature_c: float,
         hold_until: str | None = None,
     ) -> bool:
-        """Set target temperature with throttle protection."""
-        elapsed = time.time() - self._last_set_time
-        if elapsed < MIN_SET_INTERVAL_SECONDS:
-            wait = MIN_SET_INTERVAL_SECONDS - elapsed
-            logger.info("Throttling: waiting %.0fs before next set command", wait)
-            activity_log.log("write", f"Write throttled for {wait:.0f}s",
-                             serial=serial_number, wait_seconds=round(wait))
-            await asyncio.sleep(wait)
-
+        """Queue a temperature change. Returns True once the write is
+        queued and the optimistic cache is updated. Actual upstream
+        propagation and verification happen in a background task; observe
+        `_writeStatus` for outcome.
+        """
         mode = ScheduleMode.TEMPORARY_HOLD if hold_until else ScheduleMode.HOLD
-        start = time.time()
-        success = await self._api.set_thermostat(
-            serial_number,
-            temperature_celsius=temperature_c,
-            schedule_mode=mode,
-            hold_until=hold_until,
-        )
-        duration_ms = round((time.time() - start) * 1000)
-        self._last_set_time = time.time()
-
-        if success:
-            if serial_number in self._cache:
-                self._cache[serial_number].target_temperature_c = temperature_c
-                self._cache[serial_number].schedule_mode = mode
-                self._cache[serial_number].schedule_mode_name = mode.name.replace("_", " ").title()
-            logger.info("Set %s to %.1f°C", serial_number, temperature_c)
-            temp_f = temperature_c * 9 / 5 + 32
-            activity_log.log("write", f"Set {serial_number} to {temperature_c:.1f}°C / {temp_f:.1f}°F ({duration_ms}ms)",
-                             serial=serial_number,
-                             temperature_c=round(temperature_c, 2),
-                             temperature_f=round(temp_f, 1),
-                             mode=mode.name, hold_until=hold_until, duration_ms=duration_ms)
-            await self._refresh_one(serial_number)
-        else:
-            activity_log.log("error", f"Failed to set temperature on {serial_number} ({duration_ms}ms)",
-                             serial=serial_number,
-                             temperature_c=round(temperature_c, 2),
-                             duration_ms=duration_ms)
-            await notifier.notify("write_failure",
-                                  f"Failed to set temperature on {serial_number}",
-                                  f"Target: {temperature_c:.1f}°C")
-        return success
+        payload = {
+            "action": "temp",
+            "temperature_c": temperature_c,
+            "mode": mode,
+            "hold_until": hold_until,
+        }
+        self._queue_write(serial_number, payload)
+        return True
 
     async def resume_schedule(self, serial_number: str) -> bool:
-        """Resume the programmed schedule."""
-        start = time.time()
-        success = await self._api.set_thermostat(
-            serial_number, schedule_mode=ScheduleMode.RUN
-        )
-        duration_ms = round((time.time() - start) * 1000)
-        if success:
-            if serial_number in self._cache:
-                self._cache[serial_number].schedule_mode = ScheduleMode.RUN
-                self._cache[serial_number].schedule_mode_name = "Run"
-            activity_log.log("write", f"Resumed schedule for {serial_number} ({duration_ms}ms)",
-                             serial=serial_number, duration_ms=duration_ms)
-            await self._refresh_one(serial_number)
-        else:
-            await notifier.notify("write_failure", f"Failed to resume schedule for {serial_number}")
-            activity_log.log("error", f"Failed to resume schedule for {serial_number} ({duration_ms}ms)",
-                             serial=serial_number, duration_ms=duration_ms)
-        return success
+        """Queue a resume-schedule (RUN mode) write. Returns True once
+        queued; observe `_writeStatus` for outcome.
+        """
+        payload = {
+            "action": "schedule",
+            "mode": ScheduleMode.RUN,
+        }
+        self._queue_write(serial_number, payload)
+        return True
 
-    async def _refresh_one(self, serial_number: str) -> None:
-        """Refresh a single thermostat from NuHeat after a write."""
+    # --- Internal write pipeline ---
+
+    def _queue_write(self, serial: str, payload: dict) -> None:
+        """Stage a write and (re)start the debounce task. Last-write-wins
+        per serial — temp and schedule actions share the same queue slot.
+        """
+        version = self._versions.get(serial, 0) + 1
+        self._versions[serial] = version
+        self._pending_writes[serial] = payload
+        self._apply_optimistic_cache(serial, payload)
+        self._set_status(serial, "pending")
+
+        action = payload["action"]
+        if action == "temp":
+            temp_c = payload["temperature_c"]
+            temp_f = temp_c * 9 / 5 + 32
+            activity_log.log(
+                "write",
+                f"Queued {serial} -> {temp_c:.1f}°C / {temp_f:.1f}°F (v{version})",
+                serial=serial,
+                temperature_c=round(temp_c, 2),
+                temperature_f=round(temp_f, 1),
+                hold_until=payload.get("hold_until"),
+                version=version,
+            )
+        else:
+            activity_log.log(
+                "write",
+                f"Queued {serial} -> resume schedule (v{version})",
+                serial=serial,
+                version=version,
+            )
+
+        asyncio.create_task(self._run_write_pipeline(serial, version))
+
+    def _apply_optimistic_cache(self, serial: str, payload: dict) -> None:
+        cached = self._cache.get(serial)
+        if not cached:
+            return
+        if payload["action"] == "temp":
+            cached.target_temperature_c = payload["temperature_c"]
+            cached.schedule_mode = payload["mode"]
+            cached.schedule_mode_name = _mode_name(payload["mode"])
+            cached.hold_until = payload["hold_until"]
+        else:
+            cached.schedule_mode = ScheduleMode.RUN
+            cached.schedule_mode_name = _mode_name(ScheduleMode.RUN)
+            cached.hold_until = None
+
+    async def _run_write_pipeline(self, serial: str, version: int) -> None:
+        """Debounce -> POST (with one retry on upstream failure) -> verify chain."""
+        await asyncio.sleep(WRITE_DEBOUNCE_SECONDS)
+        if self._versions.get(serial) != version:
+            logger.debug("Write v%d for %s superseded during debounce", version, serial)
+            return
+
+        payload = self._pending_writes.get(serial)
+        if not payload:
+            return
+
+        # Mark verify-in-flight up front so the background poll won't trample
+        # the optimistic cache between now and the verify check.
+        self._verify_in_flight.add(serial)
         try:
-            await asyncio.sleep(5)
-            data = await self._api.get_thermostat(serial_number)
-            if data:
-                self._cache[serial_number] = Thermostat.from_api(data)
-                self._mark_refreshed()
+            sent = await self._send_upstream(serial, version, payload)
+            if not sent:
+                # Upstream POST exhausted — already marked failed inside
+                # _send_upstream; nothing else to do.
+                return
+            # Upstream acked: run verify chain
+            await self._verify_chain(serial, version, payload)
+        finally:
+            # Only the latest version owns the in-flight flag — clearing it
+            # if a newer write has superseded would be wrong (newer write
+            # holds it), but in that case we returned early above.
+            if self._versions.get(serial) == version:
+                self._verify_in_flight.discard(serial)
+
+    async def _send_upstream(self, serial: str, version: int, payload: dict) -> bool:
+        """Send the write to NuHeat. On failure, wait UPSTREAM_RETRY_DELAY
+        and try once more. Returns True if NuHeat acked, False if both
+        attempts failed (status set to 'failed' and notification sent).
+        """
+        success, error_msg = await self._post_once(serial, payload)
+        if success:
+            return True
+
+        if self._versions.get(serial) != version:
+            return False
+
+        self._set_status(serial, "retrying", error_msg or "Upstream POST failed")
+        activity_log.log(
+            "write",
+            f"Upstream POST failed for {serial}, retrying in {UPSTREAM_RETRY_DELAY_SECONDS}s",
+            serial=serial, error=error_msg,
+        )
+        await asyncio.sleep(UPSTREAM_RETRY_DELAY_SECONDS)
+
+        if self._versions.get(serial) != version:
+            return False
+
+        success, error_msg = await self._post_once(serial, payload)
+        if success:
+            return True
+
+        self._set_status(serial, "failed", error_msg or "Upstream POST failed")
+        activity_log.log(
+            "error",
+            f"Upstream POST failed twice for {serial}; giving up",
+            serial=serial, error=error_msg,
+        )
+        await notifier.notify(
+            "write_failure",
+            f"Failed to reach NuHeat for {serial}",
+            f"Last error: {error_msg or 'unknown'}",
+        )
+        return False
+
+    async def _post_once(self, serial: str, payload: dict) -> tuple[bool, str | None]:
+        """Single upstream POST. Returns (success, error_message)."""
+        start = time.time()
+        try:
+            if payload["action"] == "temp":
+                ok = await self._api.set_thermostat(
+                    serial,
+                    temperature_celsius=payload["temperature_c"],
+                    schedule_mode=payload["mode"],
+                    hold_until=payload["hold_until"],
+                )
+            else:
+                ok = await self._api.set_thermostat(
+                    serial, schedule_mode=ScheduleMode.RUN,
+                )
         except Exception as e:
-            logger.exception("Failed to refresh %s after write", serial_number)
-            activity_log.log("error", f"Post-write refresh failed for {serial_number}: {e}",
-                             serial=serial_number, exception=type(e).__name__)
+            duration_ms = round((time.time() - start) * 1000)
+            activity_log.log(
+                "error",
+                f"Upstream POST raised for {serial}: {type(e).__name__}: {e} ({duration_ms}ms)",
+                serial=serial, exception=type(e).__name__, duration_ms=duration_ms,
+            )
+            return False, f"{type(e).__name__}: {e}"
+
+        duration_ms = round((time.time() - start) * 1000)
+        if ok:
+            if payload["action"] == "temp":
+                temp_c = payload["temperature_c"]
+                temp_f = temp_c * 9 / 5 + 32
+                activity_log.log(
+                    "write",
+                    f"Sent {serial} -> {temp_c:.1f}°C / {temp_f:.1f}°F ({duration_ms}ms)",
+                    serial=serial,
+                    temperature_c=round(temp_c, 2),
+                    temperature_f=round(temp_f, 1),
+                    mode=payload["mode"].name,
+                    hold_until=payload["hold_until"],
+                    duration_ms=duration_ms,
+                )
+            else:
+                activity_log.log(
+                    "write",
+                    f"Sent {serial} -> resume schedule ({duration_ms}ms)",
+                    serial=serial, duration_ms=duration_ms,
+                )
+            return True, None
+
+        return False, f"NuHeat returned non-success ({duration_ms}ms)"
+
+    async def _verify_chain(self, serial: str, version: int, payload: dict) -> None:
+        """Read upstream after VERIFY_DELAY and compare. On mismatch, wait
+        VERIFY_RETRY_DELAY and verify once more. No re-POST on mismatch —
+        we assume NuHeat is just lagging. After the second mismatch, mark
+        failed and reconcile cache to actual upstream state.
+        """
+        self._set_status(serial, "verifying")
+        await asyncio.sleep(VERIFY_DELAY_SECONDS)
+        if self._versions.get(serial) != version:
+            return
+
+        actual = await self._read_for_verify(serial)
+        if actual is not None and self._matches(actual, payload):
+            self._cache[serial] = actual
+            self._mark_refreshed()
+            self._set_status(serial, "ok")
+            activity_log.log(
+                "write",
+                f"Verify match for {serial} after {VERIFY_DELAY_SECONDS}s",
+                serial=serial,
+            )
+            return
+
+        # First mismatch (or read failed) — wait and re-verify, no re-POST
+        activity_log.log(
+            "write",
+            f"Verify mismatch for {serial}; re-checking in {VERIFY_RETRY_DELAY_SECONDS}s",
+            serial=serial,
+            actual_target_c=getattr(actual, "target_temperature_c", None),
+            actual_mode=getattr(actual, "schedule_mode_name", None),
+        )
+        await asyncio.sleep(VERIFY_RETRY_DELAY_SECONDS)
+        if self._versions.get(serial) != version:
+            return
+
+        actual2 = await self._read_for_verify(serial)
+        if actual2 is not None and self._matches(actual2, payload):
+            self._cache[serial] = actual2
+            self._mark_refreshed()
+            self._set_status(serial, "ok")
+            activity_log.log(
+                "write",
+                f"Verify match for {serial} on retry",
+                serial=serial,
+            )
+            return
+
+        # Exhausted — reconcile cache to upstream and notify
+        if actual2 is not None:
+            self._cache[serial] = actual2
+        last_error = "Upstream did not reflect write after retry"
+        self._set_status(serial, "failed", last_error)
+        activity_log.log(
+            "error",
+            f"Verify failed for {serial}; cache reconciled to upstream state",
+            serial=serial,
+            actual_target_c=getattr(actual2, "target_temperature_c", None),
+            actual_mode=getattr(actual2, "schedule_mode_name", None),
+        )
+        detail_lines = [f"Serial: {serial}"]
+        if payload["action"] == "temp":
+            detail_lines.append(f"Wanted: {payload['temperature_c']:.1f}°C")
+            if actual2 is not None:
+                detail_lines.append(f"Actual: {actual2.target_temperature_c:.1f}°C")
+        else:
+            detail_lines.append("Wanted: resume schedule (RUN)")
+            if actual2 is not None:
+                detail_lines.append(f"Actual mode: {actual2.schedule_mode_name}")
+        await notifier.notify(
+            "write_failure",
+            f"Write to {serial} did not stick",
+            "\n".join(detail_lines),
+        )
+
+    async def _read_for_verify(self, serial: str) -> Thermostat | None:
+        try:
+            data = await self._api.get_thermostat(serial)
+            if data:
+                return Thermostat.from_api(data)
+            return None
+        except Exception as e:
+            activity_log.log(
+                "error",
+                f"Verify read failed for {serial}: {type(e).__name__}: {e}",
+                serial=serial, exception=type(e).__name__,
+            )
+            return None
+
+    def _matches(self, actual: Thermostat, payload: dict) -> bool:
+        if payload["action"] == "temp":
+            wanted_temp = payload["temperature_c"]
+            wanted_mode = payload["mode"]
+            if abs(actual.target_temperature_c - wanted_temp) > TEMP_MATCH_TOLERANCE_C:
+                return False
+            return int(actual.schedule_mode) == int(wanted_mode)
+        # Schedule resume
+        return int(actual.schedule_mode) == int(ScheduleMode.RUN)
+
+    def _set_status(self, serial: str, state: str, error: str | None = None) -> None:
+        self._write_status[serial] = {
+            "state": state,
+            "lastError": error,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
 
     def _mark_refreshed(self) -> None:
         self._last_refresh_time = time.time()

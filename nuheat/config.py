@@ -21,9 +21,12 @@ OAUTH2_AUTH_ENDPOINT = f"{OAUTH2_IDENTITY_URL}/connect/authorize"
 OAUTH2_TOKEN_ENDPOINT = f"{OAUTH2_IDENTITY_URL}/connect/token"
 OAUTH2_SCOPES = "openapi openid profile offline_access"
 
-# Polling and throttling
-DEFAULT_POLL_INTERVAL_SECONDS = 300  # 5 minutes
-MIN_SET_INTERVAL_SECONDS = 60  # 1 minute between set commands
+# Polling and write pipeline timing
+DEFAULT_POLL_INTERVAL_SECONDS = 300  # 5 minutes — full background poll cadence
+WRITE_DEBOUNCE_SECONDS = 2           # collapse rapid writes to same (serial, action)
+VERIFY_DELAY_SECONDS = 15            # wait after upstream ack, then read & compare
+VERIFY_RETRY_DELAY_SECONDS = 20      # wait after a verify mismatch, then re-verify
+UPSTREAM_RETRY_DELAY_SECONDS = 20    # wait after an upstream POST failure, then re-POST once
 
 
 class ScheduleMode(IntEnum):

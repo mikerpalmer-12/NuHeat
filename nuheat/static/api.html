@@ -216,11 +216,19 @@
 
         <!-- Rate Limiting -->
         <div class="section">
-            <h2>Rate Limiting &amp; Caching</h2>
+            <h2>Rate Limiting, Caching &amp; Write Pipeline</h2>
             <div class="intro" style="margin-bottom:0">
                 All read endpoints serve from an in-memory cache that is refreshed from NuHeat every 5 minutes
                 by a background poller. No client request ever hits NuHeat directly for reads. Responses include
                 a <code style="color:#e94560">last_updated</code> timestamp so you know the data freshness.
+                <br><br>
+                <strong>Writes</strong> are queued: a 2-second debounce collapses rapid changes (last value wins
+                per thermostat), the upstream POST fires immediately, and a verification read at +15&thinsp;s
+                (re-checked once at +35&thinsp;s on mismatch) confirms the change took. Each thermostat exposes a
+                <code style="color:#e94560">_writeStatus</code> object &mdash; <code>{state, lastError, updatedAt}</code>
+                with <code>state</code> in <code>ok | pending | verifying | retrying | failed</code> &mdash; so callers
+                can surface outcomes without polling logs. Write endpoints return <code>200 OK</code> immediately
+                once the write is queued.
                 <br><br>
                 <strong>Rate limits per IP address:</strong> 60 reads/minute, 10 writes/minute.
                 Exceeding the limit returns HTTP 429.

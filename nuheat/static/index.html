@@ -154,6 +154,44 @@
             border: 1px solid #4ecca340;
         }
 
+        .badge.pending {
+            background: #8882;
+            color: #aaa;
+            border: 1px solid #8884;
+        }
+
+        .badge.verifying {
+            background: #5b8def1a;
+            color: #5b8def;
+            border: 1px solid #5b8def40;
+        }
+
+        .badge.retrying {
+            background: #f5a62b1a;
+            color: #f5a62b;
+            border: 1px solid #f5a62b40;
+        }
+
+        .badge.failed {
+            background: #e945601a;
+            color: #e94560;
+            border: 1px solid #e9456040;
+        }
+
+        .badge.failed-detail {
+            display: block;
+            font-size: 10px;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: 0;
+            color: #e94560;
+            margin-top: 6px;
+            padding: 6px 10px;
+            background: #e9456014;
+            border-radius: 8px;
+            border: 1px solid #e9456030;
+        }
+
         .temp-display {
             text-align: center;
             margin: 24px 0;
@@ -425,7 +463,7 @@
         let scheduleCache = {};
         let scheduleVisible = {};
 
-        const AUTO_REFRESH_MS = 30000;
+        const AUTO_REFRESH_MS = 5000;  // cache-only read; cheap. Surfaces _writeStatus transitions in near-real-time.
         const DEBOUNCE_MS = 2000;
 
         function formatTemp(celsius) {
@@ -572,6 +610,33 @@
             render();
         }
 
+        const WRITE_STATUS_LABELS = {
+            pending: "Queued",
+            verifying: "Verifying",
+            retrying: "Retrying",
+            failed: "Failed",
+        };
+
+        function renderWriteBadge(ws) {
+            if (!ws || !ws.state || ws.state === "ok") return "";
+            const label = WRITE_STATUS_LABELS[ws.state] || ws.state;
+            return '<span class="badge ' + ws.state + '">' + label + '</span>';
+        }
+
+        function renderFailedDetail(ws) {
+            if (!ws || ws.state !== "failed") return "";
+            const err = ws.lastError ? escapeHtml(ws.lastError) : "Write did not propagate to NuHeat";
+            return '<div class="badge failed-detail">' + err + '</div>';
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+        }
+
         function formatTime12(clock) {
             if (!clock) return "";
             const parts = clock.split(":");
@@ -623,6 +688,8 @@
                 const onlineBadge = t.online
                     ? ''
                     : '<span class="badge offline">Offline</span>';
+                const writeBadge = renderWriteBadge(t._writeStatus);
+                const failedDetail = renderFailedDetail(t._writeStatus);
 
                 return `
                     <div class="card">
@@ -632,10 +699,12 @@
                                 <div class="card-serial">${serial}${t.group ? " &middot; " + t.group : ""}</div>
                             </div>
                             <div class="card-badges">
+                                ${writeBadge}
                                 ${heatingBadge}
                                 ${onlineBadge}
                             </div>
                         </div>
+                        ${failedDetail}
 
                         <div class="temp-display">
                             <div class="current-temp">

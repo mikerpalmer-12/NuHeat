@@ -462,22 +462,15 @@
         </div>
 
         <div class="setting-group">
-            <h2>Write Throttle</h2>
+            <h2>Write Pipeline</h2>
             <div class="desc">
-                The minimum time the server waits between sending temperature change commands to
-                NuHeat's API. This is a global throttle across all clients -- even if multiple
-                devices or users try to change temperatures at the same time, commands are queued
-                and spaced out by this delay. This prevents overwhelming NuHeat when several
-                thermostats are adjusted in quick succession.
-            </div>
-            <div class="setting-row">
-                <span class="setting-label">Throttle delay <span class="unit">(seconds)</span></span>
-                <input type="number" class="setting-input" id="writeThrottle" min="0" max="300">
-            </div>
-            <div class="setting-example">
-                <strong>60</strong> = one command to NuHeat per minute at most (safe default)<br>
-                <strong>30</strong> = faster response for multiple thermostat changes<br>
-                <strong>0</strong> = no throttle, send commands immediately (use with caution)
+                Writes use a fixed pipeline: a 2-second debounce collapses rapid changes
+                (last value wins per thermostat), the upstream call fires immediately, and
+                a verification read at +15&thinsp;s (re-checked once at +35&thinsp;s on mismatch)
+                confirms the change took. Each thermostat exposes a <code>_writeStatus</code>
+                field (ok / pending / verifying / retrying / failed) so callers like the
+                Crestron driver can surface the result without polling logs. These timings
+                are not user-tunable.
             </div>
         </div>
 
@@ -814,7 +807,6 @@
                 document.getElementById("pollInterval").value = data.poll_interval;
                 document.getElementById("rateLimitReads").value = data.rate_limit_reads;
                 document.getElementById("rateLimitWrites").value = data.rate_limit_writes;
-                document.getElementById("writeThrottle").value = data.write_throttle;
                 document.getElementById("debugMode").checked = data.debug_mode;
                 document.getElementById("apiLogging").checked = data.api_logging;
                 document.getElementById("changesList").innerHTML = "";
@@ -831,14 +823,12 @@
             const pi = parseInt(document.getElementById("pollInterval").value);
             const rlr = parseInt(document.getElementById("rateLimitReads").value);
             const rlw = parseInt(document.getElementById("rateLimitWrites").value);
-            const wt = parseInt(document.getElementById("writeThrottle").value);
             const dm = document.getElementById("debugMode").checked;
             const al = document.getElementById("apiLogging").checked;
 
             if (pi !== original.poll_interval) payload.poll_interval = pi;
             if (rlr !== original.rate_limit_reads) payload.rate_limit_reads = rlr;
             if (rlw !== original.rate_limit_writes) payload.rate_limit_writes = rlw;
-            if (wt !== original.write_throttle) payload.write_throttle = wt;
             if (dm !== original.debug_mode) payload.debug_mode = dm;
             if (al !== original.api_logging) payload.api_logging = al;
 

@@ -84,9 +84,12 @@ Everything else (dashboard, REST API, CLI) works identically with either backend
 [Dashboard]  [REST API]    [QS API]
 ```
 
-Client read requests never trigger NuHeat API calls. Writes are throttled
-(default 60s minimum between set-temperature commands) and always followed
-by one targeted refresh to keep the cache accurate.
+Client read requests never trigger NuHeat API calls. Writes use a 2-second
+debounce (last value wins per thermostat), POST upstream immediately, and
+verify the change at +15s (re-checked once at +35s on mismatch). Each
+thermostat exposes a `_writeStatus` field (`ok` / `pending` / `verifying` /
+`retrying` / `failed`) so consumers can see write outcomes without polling
+the activity log.
 
 ## Running with Docker
 
@@ -113,7 +116,6 @@ volume and override `.env` defaults on startup.
 | `NUHEAT_POLL_INTERVAL` | Seconds between NuHeat polls | 300 |
 | `NUHEAT_RATE_LIMIT_READS` | Read requests per minute per IP | 60 |
 | `NUHEAT_RATE_LIMIT_WRITES` | Write requests per minute per IP | 10 |
-| `NUHEAT_WRITE_THROTTLE` | Minimum seconds between writes | 60 |
 | `NUHEAT_DEBUG_LOG` | Write logs to disk immediately | false |
 | `NUHEAT_LOG_DIR` | Log and config directory | `/app/logs` |
 

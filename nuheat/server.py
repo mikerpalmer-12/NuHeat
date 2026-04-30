@@ -40,7 +40,6 @@ class Settings:
         self.poll_interval = pc.get("poll_interval") or int(os.environ.get("NUHEAT_POLL_INTERVAL", DEFAULT_POLL_INTERVAL_SECONDS))
         self.rate_limit_reads = pc.get("rate_limit_reads") or int(os.environ.get("NUHEAT_RATE_LIMIT_READS", "60"))
         self.rate_limit_writes = pc.get("rate_limit_writes") or int(os.environ.get("NUHEAT_RATE_LIMIT_WRITES", "10"))
-        self.write_throttle = pc.get("write_throttle") if pc.get("write_throttle") is not None else int(os.environ.get("NUHEAT_WRITE_THROTTLE", "60"))
         self.debug_mode = pc.get("debug_mode") if pc.get("debug_mode") is not None else activity_log.debug_mode
         self.api_logging = pc.get("api_logging", False)
         # Apply debug mode from persisted config
@@ -51,7 +50,6 @@ class Settings:
             "poll_interval": self.poll_interval,
             "rate_limit_reads": self.rate_limit_reads,
             "rate_limit_writes": self.rate_limit_writes,
-            "write_throttle": self.write_throttle,
             "debug_mode": self.debug_mode,
             "api_logging": self.api_logging,
         }
@@ -290,7 +288,6 @@ class UpdateSettingsRequest(BaseModel):
     poll_interval: int | None = Field(None, ge=30, le=3600, description="Poll interval in seconds (30-3600)")
     rate_limit_reads: int | None = Field(None, ge=1, le=1000, description="Read rate limit per minute per IP (1-1000)")
     rate_limit_writes: int | None = Field(None, ge=1, le=100, description="Write rate limit per minute per IP (1-100)")
-    write_throttle: int | None = Field(None, ge=0, le=300, description="Minimum seconds between write commands (0-300)")
     debug_mode: bool | None = Field(None, description="Write every log entry to disk immediately")
     api_logging: bool | None = Field(None, description="Log every API request with method, path, IP, status, and duration")
 
@@ -322,14 +319,6 @@ async def update_settings(req: UpdateSettingsRequest):
         settings.rate_limit_writes = req.rate_limit_writes
         changes.append(f"rate_limit_writes: {old} -> {req.rate_limit_writes}/min")
 
-    if req.write_throttle is not None and req.write_throttle != settings.write_throttle:
-        old = settings.write_throttle
-        settings.write_throttle = req.write_throttle
-        if manager:
-            from nuheat import config
-            config.MIN_SET_INTERVAL_SECONDS = req.write_throttle
-        changes.append(f"write_throttle: {old}s -> {req.write_throttle}s")
-
     if req.debug_mode is not None and req.debug_mode != settings.debug_mode:
         old = settings.debug_mode
         settings.debug_mode = req.debug_mode
@@ -348,7 +337,6 @@ async def update_settings(req: UpdateSettingsRequest):
             "poll_interval": settings.poll_interval,
             "rate_limit_reads": settings.rate_limit_reads,
             "rate_limit_writes": settings.rate_limit_writes,
-            "write_throttle": settings.write_throttle,
             "debug_mode": settings.debug_mode,
             "api_logging": settings.api_logging,
         })
@@ -537,6 +525,12 @@ class SetTemperatureRequest(BaseModel):
         return None
 
 
+class WriteStatus(BaseModel):
+    state: str = Field(description="ok | pending | verifying | retrying | failed")
+    lastError: str | None = None
+    updatedAt: str | None = None
+
+
 class ThermostatResponse(BaseModel):
     serial_number: str
     name: str
@@ -554,6 +548,10 @@ class ThermostatResponse(BaseModel):
     hold_info: dict
     firmware: str
     last_updated: str
+    write_status: WriteStatus | None = Field(None, alias="_writeStatus")
+
+    class Config:
+        populate_by_name = True
 
 
 class MessageResponse(BaseModel):
@@ -564,9 +562,11 @@ class MessageResponse(BaseModel):
 # --- Helper ---
 
 def _thermostat_response(t) -> dict:
-    """Build a thermostat response dict with last_updated."""
+    """Build a thermostat response dict with last_updated and write status."""
     d = t.to_dict()
     d["last_updated"] = manager.last_updated if manager else ""
+    if manager:
+        d["_writeStatus"] = manager.get_write_status(t.serial_number)
     return d
 
 
@@ -606,41 +606,42 @@ async def get_schedule(serial_number: str):
     }
 
 
-# --- Write Endpoints (hit NuHeat, throttled) ---
+# --- Write Endpoints (debounced 2s, queued, then verified) ---
 
 @app.put("/api/thermostats/{serial_number}/temperature", response_model=MessageResponse)
 async def set_temperature(serial_number: str, req: SetTemperatureRequest):
-    """Set the target temperature for a thermostat.
+    """Queue a target temperature change for a thermostat.
 
-    Provide temperature_c (Celsius) or temperature_f (Fahrenheit).
-    Omit hold_until for a permanent hold, or provide an ISO datetime
-    for a temporary hold that resumes the schedule at that time.
+    Returns immediately. The write is collapsed within a 2-second debounce
+    window (last value wins), sent upstream, then verified at +15s.
+    Observe the thermostat's `_writeStatus` field for outcome
+    (ok / pending / verifying / retrying / failed).
     """
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
+    if not manager.get_cached(serial_number):
+        raise HTTPException(status_code=404, detail=f"Thermostat {serial_number} not found")
 
     temp_c = req.get_celsius()
     if temp_c is None:
         raise HTTPException(status_code=400, detail="Provide temperature_c or temperature_f")
 
-    success = await manager.set_temperature(serial_number, temp_c, req.hold_until)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to set temperature")
-
-    return {"message": f"Temperature set to {temp_c:.1f}°C", "success": True}
+    await manager.set_temperature(serial_number, temp_c, req.hold_until)
+    return {"message": f"Queued: {temp_c:.1f}°C", "success": True}
 
 
 @app.post("/api/thermostats/{serial_number}/resume", response_model=MessageResponse)
 async def resume_schedule(serial_number: str):
-    """Resume the programmed schedule for a thermostat."""
+    """Queue a resume-schedule (RUN mode) write for a thermostat. Returns
+    immediately; observe `_writeStatus` for outcome.
+    """
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
+    if not manager.get_cached(serial_number):
+        raise HTTPException(status_code=404, detail=f"Thermostat {serial_number} not found")
 
-    success = await manager.resume_schedule(serial_number)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to resume schedule")
-
-    return {"message": "Schedule resumed", "success": True}
+    await manager.resume_schedule(serial_number)
+    return {"message": "Queued: resume schedule", "success": True}
 
 
 # --- Force Refresh (throttled to once per 60s) ---
@@ -713,9 +714,13 @@ async def qs_set(
     temp_f: float | None = Query(None, description="Target temperature in Fahrenheit"),
     hold_until: str | None = Query(None, description="ISO datetime for temporary hold"),
 ):
-    """Set thermostat temperature via query string."""
+    """Queue a temperature change via query string. Returns immediately;
+    poll the thermostat to observe `_writeStatus` for outcome.
+    """
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
+    if not manager.get_cached(serial):
+        raise HTTPException(status_code=404, detail=f"Thermostat {serial} not found")
 
     target_c = temp_c
     if target_c is None and temp_f is not None:
@@ -723,18 +728,16 @@ async def qs_set(
     if target_c is None:
         raise HTTPException(status_code=400, detail="Provide temp_c or temp_f")
 
-    success = await manager.set_temperature(serial, target_c, hold_until)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to set temperature")
-
+    await manager.set_temperature(serial, target_c, hold_until)
     temp_f_display = target_c * 9 / 5 + 32
     return {
         "success": True,
-        "message": f"Temperature set to {target_c:.1f}°C / {temp_f_display:.1f}°F",
+        "message": f"Queued: {target_c:.1f}°C / {temp_f_display:.1f}°F",
         "serial": serial,
         "target_temperature_c": round(target_c, 1),
         "target_temperature_f": round(temp_f_display, 1),
         "hold_until": hold_until,
+        "write_status": manager.get_write_status(serial),
     }
 
 
@@ -742,15 +745,21 @@ async def qs_set(
 async def qs_resume(
     serial: str = Query(..., description="Thermostat serial number"),
 ):
-    """Resume the programmed schedule via query string."""
+    """Queue a resume-schedule write via query string. Returns immediately;
+    poll the thermostat to observe `_writeStatus` for outcome.
+    """
     if not manager:
         raise HTTPException(status_code=503, detail="Manager not initialized")
+    if not manager.get_cached(serial):
+        raise HTTPException(status_code=404, detail=f"Thermostat {serial} not found")
 
-    success = await manager.resume_schedule(serial)
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to resume schedule")
-
-    return {"success": True, "message": "Schedule resumed", "serial": serial}
+    await manager.resume_schedule(serial)
+    return {
+        "success": True,
+        "message": "Queued: resume schedule",
+        "serial": serial,
+        "write_status": manager.get_write_status(serial),
+    }
 
 
 @app.get("/qs/schedule")
