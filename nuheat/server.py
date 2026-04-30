@@ -551,7 +551,7 @@ class ThermostatResponse(BaseModel):
     max_temperature_c: float
     schedule_mode: int
     schedule_mode_name: str
-    hold_until: str | None
+    hold_info: dict
     firmware: str
     last_updated: str
 

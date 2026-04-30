@@ -656,8 +656,7 @@
                         </div>
 
                         <div class="schedule-info">
-                            Mode: <span class="mode">${t.schedule_mode_name}</span>
-                            ${t.hold_until ? " &middot; Until " + new Date(t.hold_until).toLocaleString() : ""}
+                            <span class="mode">${t.hold_info ? t.hold_info.description : t.schedule_mode_name}</span>
                             <button class="schedule-toggle" onclick="toggleSchedule('${serial}')">
                                 ${scheduleVisible[serial] ? "Hide Schedule" : "Show Schedule"}
                             </button>
