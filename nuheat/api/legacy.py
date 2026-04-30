@@ -261,7 +261,7 @@ class LegacyAPI(NuHeatAPI):
             "max_temperature_c": round(nuheat_to_celsius(raw.get("MaxTemp", 7000)), 1),
             "schedule_mode": raw.get("ScheduleMode", 0),
             "schedule_mode_name": _schedule_mode_name(raw.get("ScheduleMode", 0)),
-            "hold_until": raw.get("HoldSetPointDateTime"),
+            "hold_until": raw.get("HoldSetPointDateTime") if raw.get("ScheduleMode") == ScheduleMode.TEMPORARY_HOLD else None,
             "firmware": raw.get("SWVersion", ""),
             "schedules": raw.get("Schedules", []),
         }
