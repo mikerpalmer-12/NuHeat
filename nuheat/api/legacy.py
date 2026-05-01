@@ -215,6 +215,10 @@ class LegacyAPI(NuHeatAPI):
 
         if schedule_mode is not None:
             params["ScheduleMode"] = schedule_mode
+            # NuHeat silently falls back to Run if TEMPORARY_HOLD has no
+            # end time, so always include HoldSetPointDateTime alongside it.
+            if schedule_mode == ScheduleMode.TEMPORARY_HOLD and hold_until:
+                params["HoldSetPointDateTime"] = hold_until
         elif temperature_celsius is not None:
             if hold_until:
                 params["ScheduleMode"] = ScheduleMode.TEMPORARY_HOLD

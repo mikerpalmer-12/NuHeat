@@ -7,6 +7,12 @@ services:
       - "8777:8080"
     env_file:
       - .env
+    environment:
+      # Container TZ — defaults to America/Chicago. Override in .env if your
+      # thermostats are in a different timezone. NuHeat schedule events are
+      # interpreted in the thermostat's local time, so the container needs to
+      # match for "Hold Until Next Event" to compute correctly.
+      - TZ=${TZ:-America/Chicago}
     volumes:
       - nuheat-logs:/app/logs
     healthcheck:
