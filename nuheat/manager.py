@@ -368,6 +368,7 @@ class ThermostatManager:
             cached.schedule_mode = payload["mode"]
             cached.schedule_mode_name = _mode_name(payload["mode"])
             cached.hold_until = payload["hold_until"]
+            cached.heating = cached.target_temperature_c > cached.current_temperature_c
         else:
             cached.schedule_mode = ScheduleMode.RUN
             cached.schedule_mode_name = _mode_name(ScheduleMode.RUN)
@@ -379,6 +380,7 @@ class ThermostatManager:
             current_event = cached._find_current_event()
             if current_event:
                 cached.target_temperature_c = current_event["temperature_c"]
+                cached.heating = cached.target_temperature_c > cached.current_temperature_c
 
     async def _run_write_pipeline(self, serial: str, version: int) -> None:
         """Debounce -> POST (with one retry on upstream failure) -> verify chain."""
