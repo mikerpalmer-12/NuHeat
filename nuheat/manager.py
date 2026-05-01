@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 MIN_REFRESH_INTERVAL_SECONDS = 60
 TEMP_MATCH_TOLERANCE_C = 0.3  # NuHeat round-trips through an integer format
 
+HOLD_UNTIL_NEXT_SCHEDULE = "next_schedule"  # sentinel: resolve to the next active schedule event
+
 
 def _mode_name(mode: ScheduleMode) -> str:
     return SCHEDULE_MODE_NAMES.get(mode, mode.name.replace("_", " ").title())
@@ -269,7 +271,38 @@ class ThermostatManager:
         queued and the optimistic cache is updated. Actual upstream
         propagation and verification happen in a background task; observe
         `_writeStatus` for outcome.
+
+        `hold_until` may be:
+          - `None` -> permanent hold
+          - `"next_schedule"` -> server resolves to the next active schedule event
+          - an ISO datetime string -> temporary hold until that moment
+
+        Returns False if the caller asked for `next_schedule` but the
+        thermostat's schedule has no upcoming events to hold against.
         """
+        if hold_until == HOLD_UNTIL_NEXT_SCHEDULE:
+            cached = self._cache.get(serial_number)
+            if not cached:
+                return False
+            next_event = cached._find_next_event()
+            if not next_event:
+                activity_log.log(
+                    "error",
+                    f"Cannot resolve next-schedule hold for {serial_number}: no upcoming events",
+                    serial=serial_number,
+                )
+                return False
+            hold_until = next_event["datetime_iso"]
+            activity_log.log(
+                "write",
+                f"Resolved next-schedule hold for {serial_number} -> {hold_until} ({next_event['day']} {next_event['time_12h']} {next_event['event_type']})",
+                serial=serial_number,
+                hold_until=hold_until,
+                next_event_day=next_event["day"],
+                next_event_time=next_event["time"],
+                next_event_type=next_event["event_type"],
+            )
+
         mode = ScheduleMode.TEMPORARY_HOLD if hold_until else ScheduleMode.HOLD
         payload = {
             "action": "temp",

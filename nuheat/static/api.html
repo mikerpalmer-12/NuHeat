@@ -274,8 +274,8 @@
                     <span class="endpoint-path">/api/thermostats/{serial_number}/temperature</span>
                 </div>
                 <div class="endpoint-desc">
-                    Set the target temperature. Provide temperature_c or temperature_f.
-                    Omit hold_until for a permanent hold, or provide an ISO datetime for a temporary hold.
+                    Queue a target temperature change. Returns immediately; observe <code style="color:#e94560">_writeStatus</code>
+                    on the thermostat for outcome.
                 </div>
                 <div class="endpoint-details">
                     <div class="detail-label">Path Parameters</div>
@@ -288,7 +288,11 @@
                         <tr><th>Name</th><th>Type</th><th>Description</th></tr>
                         <tr><td>temperature_c</td><td>float <span class="optional">optional</span></td><td>Target temperature in Celsius</td></tr>
                         <tr><td>temperature_f</td><td>float <span class="optional">optional</span></td><td>Target temperature in Fahrenheit</td></tr>
-                        <tr><td>hold_until</td><td>string <span class="optional">optional</span></td><td>ISO datetime for temporary hold</td></tr>
+                        <tr><td>hold_until</td><td>string <span class="optional">optional</span></td><td>
+                            Hold mode. Omit for a <strong>permanent</strong> hold; pass <code>"next_schedule"</code>
+                            to hold until the next active schedule event; or pass a <strong>future</strong> ISO datetime
+                            for a hold until that specific moment. Past datetimes are rejected with HTTP 400.
+                        </td></tr>
                     </table>
                     <div class="detail-label">Examples</div>
                     <div class="example">
@@ -297,10 +301,15 @@
                         &nbsp;&nbsp;-H "Content-Type: application/json" \<br>
                         &nbsp;&nbsp;-d '{"temperature_f": 72}'<br>
                         <br>
-                        <span class="comment"># Set to 25°C until a specific time</span><br>
+                        <span class="comment"># Hold 70°F until the next schedule event (server resolves the time)</span><br>
                         curl -X PUT http://localhost:8777/api/thermostats/ABC123/temperature \<br>
                         &nbsp;&nbsp;-H "Content-Type: application/json" \<br>
-                        &nbsp;&nbsp;-d '{"temperature_c": 25, "hold_until": "2025-12-01T08:00:00"}'
+                        &nbsp;&nbsp;-d '{"temperature_f": 70, "hold_until": "next_schedule"}'<br>
+                        <br>
+                        <span class="comment"># Set to 25°C until a specific future time</span><br>
+                        curl -X PUT http://localhost:8777/api/thermostats/ABC123/temperature \<br>
+                        &nbsp;&nbsp;-H "Content-Type: application/json" \<br>
+                        &nbsp;&nbsp;-d '{"temperature_c": 25, "hold_until": "2026-12-01T08:00:00"}'
                     </div>
                 </div>
             </div>
@@ -381,7 +390,7 @@
                     <span class="method get">GET</span>
                     <span class="endpoint-path">/qs/set</span>
                 </div>
-                <div class="endpoint-desc">Set thermostat temperature. Provide temp_c or temp_f.</div>
+                <div class="endpoint-desc">Queue a temperature change via query string. Returns immediately.</div>
                 <div class="endpoint-details">
                     <div class="detail-label">Query Parameters</div>
                     <table class="params-table">
@@ -389,15 +398,21 @@
                         <tr><td>serial</td><td>string <span class="required">required</span></td><td>Thermostat serial number</td></tr>
                         <tr><td>temp_c</td><td>float <span class="optional">optional</span></td><td>Target temperature in Celsius</td></tr>
                         <tr><td>temp_f</td><td>float <span class="optional">optional</span></td><td>Target temperature in Fahrenheit</td></tr>
-                        <tr><td>hold_until</td><td>string <span class="optional">optional</span></td><td>ISO datetime for temporary hold</td></tr>
+                        <tr><td>hold_until</td><td>string <span class="optional">optional</span></td><td>
+                            Omit for permanent hold; pass <code>next_schedule</code> to hold until the next active
+                            schedule event; or pass a future ISO datetime. Past datetimes are rejected with HTTP 400.
+                        </td></tr>
                     </table>
                     <div class="detail-label">Examples</div>
                     <div class="example">
-                        <span class="comment"># Set to 72°F</span><br>
+                        <span class="comment"># Set to 72°F (permanent hold)</span><br>
                         curl "http://localhost:8777/qs/set?serial=ABC123&amp;temp_f=72"<br>
                         <br>
-                        <span class="comment"># Set to 25°C with temporary hold</span><br>
-                        curl "http://localhost:8777/qs/set?serial=ABC123&amp;temp_c=25&amp;hold_until=2025-12-01T08:00:00"
+                        <span class="comment"># Hold 70°F until the next schedule event</span><br>
+                        curl "http://localhost:8777/qs/set?serial=ABC123&amp;temp_f=70&amp;hold_until=next_schedule"<br>
+                        <br>
+                        <span class="comment"># Set to 25°C with a specific future hold time</span><br>
+                        curl "http://localhost:8777/qs/set?serial=ABC123&amp;temp_c=25&amp;hold_until=2026-12-01T08:00:00"
                     </div>
                 </div>
             </div>

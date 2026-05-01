@@ -588,6 +588,31 @@
             if (btn) btn.disabled = false;
         }
 
+        async function holdUntilNext(serial) {
+            const btn = document.querySelector(`[data-hold-next="${serial}"]`);
+            if (btn) btn.disabled = true;
+
+            const targetC = getTargetC(serial);
+            try {
+                const resp = await fetch(`/api/thermostats/${serial}/temperature`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ temperature_c: targetC, hold_until: "next_schedule" }),
+                });
+                if (!resp.ok) {
+                    const data = await resp.json().catch(() => null);
+                    throw new Error((data && data.detail) || "Failed");
+                }
+                delete pendingTargets[serial];
+                showToast("Holding " + formatTemp(targetC) + " until next schedule event");
+                setTimeout(refresh, 2000);
+            } catch (e) {
+                showToast(e.message || "Failed to set hold", "error");
+            }
+
+            if (btn) btn.disabled = false;
+        }
+
         async function toggleSchedule(serial) {
             if (scheduleVisible[serial]) {
                 scheduleVisible[serial] = false;
@@ -732,6 +757,9 @@
                         </div>
 
                         <div class="card-actions">
+                            <button class="action-btn secondary" data-hold-next="${serial}" onclick="holdUntilNext('${serial}')">
+                                Hold Until Next Event
+                            </button>
                             <button class="action-btn secondary" data-resume="${serial}" onclick="resumeSchedule('${serial}')">
                                 Resume Schedule
                             </button>

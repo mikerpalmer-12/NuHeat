@@ -6,6 +6,7 @@ import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -18,7 +19,7 @@ from nuheat.activity_log import activity_log
 from nuheat.api.legacy import LegacyAPI
 from nuheat.api.oauth2 import OAuth2API
 from nuheat.config import DEFAULT_POLL_INTERVAL_SECONDS, ScheduleMode
-from nuheat.manager import ThermostatManager
+from nuheat.manager import HOLD_UNTIL_NEXT_SCHEDULE, ThermostatManager
 from nuheat.notifications import notifier
 from nuheat.persistent_config import persistent_config
 
@@ -515,7 +516,14 @@ async def get_logs(
 class SetTemperatureRequest(BaseModel):
     temperature_c: float | None = Field(None, description="Target temperature in Celsius")
     temperature_f: float | None = Field(None, description="Target temperature in Fahrenheit")
-    hold_until: str | None = Field(None, description="ISO datetime for temporary hold (omit for permanent hold)")
+    hold_until: str | None = Field(
+        None,
+        description=(
+            "Hold mode. Omit for a permanent hold, pass an ISO datetime "
+            "for a hold until a specific moment, or pass 'next_schedule' "
+            "to hold until the next active schedule event."
+        ),
+    )
 
     def get_celsius(self) -> float | None:
         if self.temperature_c is not None:
@@ -523,6 +531,41 @@ class SetTemperatureRequest(BaseModel):
         if self.temperature_f is not None:
             return (self.temperature_f - 32) * 5 / 9
         return None
+
+
+def _validate_hold_until(value: str | None) -> str | None:
+    """Reject hold_until values that are already in the past.
+
+    Returns the value unchanged if valid (None, the next-schedule
+    sentinel, or a future ISO datetime). Raises HTTPException(400)
+    otherwise. Caller is responsible for handling the sentinel —
+    we only check that explicit datetimes are in the future, since a
+    past hold_until is silently treated by NuHeat as "resume schedule
+    immediately."
+    """
+    if value is None or value == HOLD_UNTIL_NEXT_SCHEDULE:
+        return value
+    try:
+        # Accept "...Z" (UTC) and "+00:00" / "-07:00" forms; also bare local
+        normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"hold_until is not a valid ISO datetime: {value!r}",
+        )
+    now = datetime.now(parsed.tzinfo) if parsed.tzinfo else datetime.now()
+    if parsed <= now:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"hold_until {value!r} is not in the future. NuHeat treats expired "
+                f"holds as 'resume schedule', so this would not have the intended effect. "
+                f"Use 'next_schedule' to auto-resolve, omit hold_until for permanent hold, "
+                f"or pass a future datetime."
+            ),
+        )
+    return value
 
 
 class WriteStatus(BaseModel):
@@ -626,7 +669,16 @@ async def set_temperature(serial_number: str, req: SetTemperatureRequest):
     if temp_c is None:
         raise HTTPException(status_code=400, detail="Provide temperature_c or temperature_f")
 
-    await manager.set_temperature(serial_number, temp_c, req.hold_until)
+    hold_until = _validate_hold_until(req.hold_until)
+    queued = await manager.set_temperature(serial_number, temp_c, hold_until)
+    if not queued:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Could not resolve next-schedule hold for {serial_number}: "
+                f"thermostat has no upcoming active schedule events."
+            ),
+        )
     return {"message": f"Queued: {temp_c:.1f}°C", "success": True}
 
 
@@ -712,7 +764,10 @@ async def qs_set(
     serial: str = Query(..., description="Thermostat serial number"),
     temp_c: float | None = Query(None, description="Target temperature in Celsius"),
     temp_f: float | None = Query(None, description="Target temperature in Fahrenheit"),
-    hold_until: str | None = Query(None, description="ISO datetime for temporary hold"),
+    hold_until: str | None = Query(
+        None,
+        description="Future ISO datetime for a temporary hold, or 'next_schedule' to hold until the next active schedule event. Omit for permanent hold.",
+    ),
 ):
     """Queue a temperature change via query string. Returns immediately;
     poll the thermostat to observe `_writeStatus` for outcome.
@@ -728,7 +783,16 @@ async def qs_set(
     if target_c is None:
         raise HTTPException(status_code=400, detail="Provide temp_c or temp_f")
 
-    await manager.set_temperature(serial, target_c, hold_until)
+    hold_until = _validate_hold_until(hold_until)
+    queued = await manager.set_temperature(serial, target_c, hold_until)
+    if not queued:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Could not resolve next-schedule hold for {serial}: "
+                f"thermostat has no upcoming active schedule events."
+            ),
+        )
     temp_f_display = target_c * 9 / 5 + 32
     return {
         "success": True,
