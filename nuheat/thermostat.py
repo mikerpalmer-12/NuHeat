@@ -114,6 +114,58 @@ class Thermostat:
 
         return None
 
+    def _find_current_event(self) -> dict[str, Any] | None:
+        """Find the most recent active scheduled event at or before now.
+
+        This is the slot the schedule is currently sitting in — its
+        setpoint is what NuHeat would target if the thermostat were in
+        Run mode right now. Used to pre-fill the cache target temp on
+        resume_schedule so the value isn't stale until the verify read
+        ~15s later.
+        """
+        if not self.schedules or len(self.schedules) < 7:
+            return None
+
+        now = datetime.now()
+        current_weekday = now.weekday()
+
+        # Walk backwards up to 7 days to find the latest active event <= now
+        for day_offset in range(8):
+            check_weekday = (current_weekday - day_offset) % 7
+            day_data = self.schedules[check_weekday]
+            events = day_data.get("Events", [])
+
+            for event in sorted(events, key=lambda e: e.get("Clock", ""), reverse=True):
+                if not event.get("Active", False):
+                    continue
+
+                clock = event.get("Clock", "")
+                if not clock:
+                    continue
+
+                parts = clock.split(":")
+                if len(parts) < 2:
+                    continue
+
+                hour, minute = int(parts[0]), int(parts[1])
+                event_date = now.date() - timedelta(days=day_offset)
+                event_dt = datetime(event_date.year, event_date.month, event_date.day,
+                                    hour, minute)
+
+                if event_dt <= now:
+                    day_name = DAY_NAMES[check_weekday]
+                    event_type = EVENT_NAMES.get(event.get("ScheduleType", -1), "Unknown")
+                    return {
+                        "day": day_name,
+                        "time": clock,
+                        "time_12h": _format_12h(hour, minute),
+                        "event_type": event_type,
+                        "datetime_iso": event_dt.isoformat(),
+                        "temperature_c": round(nuheat_to_celsius(event.get("TempFloor", 0)), 1),
+                    }
+
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         hold_info = self.get_hold_info()
         return {

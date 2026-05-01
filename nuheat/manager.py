@@ -372,6 +372,13 @@ class ThermostatManager:
             cached.schedule_mode = ScheduleMode.RUN
             cached.schedule_mode_name = _mode_name(ScheduleMode.RUN)
             cached.hold_until = None
+            # Pre-fill the schedule's current setpoint so consumers see the
+            # right target the moment Run is queued, not 15s later when the
+            # verify read returns. If the schedule data isn't usable, leave
+            # target_temperature_c stale — the verify read will correct it.
+            current_event = cached._find_current_event()
+            if current_event:
+                cached.target_temperature_c = current_event["temperature_c"]
 
     async def _run_write_pipeline(self, serial: str, version: int) -> None:
         """Debounce -> POST (with one retry on upstream failure) -> verify chain."""
