@@ -27,6 +27,8 @@ WRITE_DEBOUNCE_SECONDS = 2           # collapse rapid writes to same (serial, ac
 VERIFY_DELAY_SECONDS = 15            # wait after upstream ack, then read & compare
 VERIFY_RETRY_DELAY_SECONDS = 20      # wait after a verify mismatch, then re-verify
 UPSTREAM_RETRY_DELAY_SECONDS = 20    # wait after an upstream POST failure, then re-POST once
+HEATING_GRACE_SECONDS = 180          # protect optimistic heating prediction from being overwritten
+                                     # by stale NuHeat cloud values during this window after a write
 
 
 class ScheduleMode(IntEnum):

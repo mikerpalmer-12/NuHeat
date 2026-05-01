@@ -9,6 +9,7 @@ from typing import Any
 from nuheat.activity_log import activity_log
 from nuheat.api.base import NuHeatAPI
 from nuheat.config import (
+    HEATING_GRACE_SECONDS,
     SCHEDULE_MODE_NAMES,
     UPSTREAM_RETRY_DELAY_SECONDS,
     VERIFY_DELAY_SECONDS,
@@ -66,6 +67,12 @@ class ThermostatManager:
         # leaves their cache entry untouched so it can't trample the
         # optimistic value before verification completes.
         self._verify_in_flight: set[str] = set()
+        # Timestamp of the most recent optimistic heating prediction per
+        # serial. NuHeat's cloud `Heating` field lags real thermostat
+        # behavior by 30s+, so during this window we keep our prediction
+        # rather than letting verify reads or polls replace it with stale
+        # cloud values.
+        self._heating_predicted_at: dict[str, float] = {}
 
     @property
     def api(self) -> NuHeatAPI:
@@ -197,6 +204,12 @@ class ThermostatManager:
             if sn in self._verify_in_flight:
                 thermostats.append(self._cache.get(sn) or t)
             else:
+                # Preserve our optimistic heating prediction during the
+                # grace window — NuHeat's cloud `Heating` flag lags
+                # physical state by 30s+, so the value here is likely
+                # stale even though target/mode are settled.
+                if self._in_heating_grace(sn) and old is not None:
+                    t.heating = old.heating
                 self._cache[sn] = t
                 thermostats.append(t)
 
@@ -369,6 +382,7 @@ class ThermostatManager:
             cached.schedule_mode_name = _mode_name(payload["mode"])
             cached.hold_until = payload["hold_until"]
             cached.heating = cached.target_temperature_c > cached.current_temperature_c
+            self._heating_predicted_at[serial] = time.time()
         else:
             cached.schedule_mode = ScheduleMode.RUN
             cached.schedule_mode_name = _mode_name(ScheduleMode.RUN)
@@ -381,6 +395,13 @@ class ThermostatManager:
             if current_event:
                 cached.target_temperature_c = current_event["temperature_c"]
                 cached.heating = cached.target_temperature_c > cached.current_temperature_c
+                self._heating_predicted_at[serial] = time.time()
+
+    def _in_heating_grace(self, serial: str) -> bool:
+        last = self._heating_predicted_at.get(serial)
+        if last is None:
+            return False
+        return (time.time() - last) < HEATING_GRACE_SECONDS
 
     async def _run_write_pipeline(self, serial: str, version: int) -> None:
         """Debounce -> POST (with one retry on upstream failure) -> verify chain."""
@@ -518,6 +539,9 @@ class ThermostatManager:
         if self._versions.get(serial) != version:
             return
         if actual is not None and self._matches(actual, payload):
+            # Preserve heating prediction during the grace window
+            if self._in_heating_grace(serial) and serial in self._cache:
+                actual.heating = self._cache[serial].heating
             self._cache[serial] = actual
             self._mark_refreshed()
             self._set_status(serial, "ok")
@@ -545,6 +569,8 @@ class ThermostatManager:
         if self._versions.get(serial) != version:
             return
         if actual2 is not None and self._matches(actual2, payload):
+            if self._in_heating_grace(serial) and serial in self._cache:
+                actual2.heating = self._cache[serial].heating
             self._cache[serial] = actual2
             self._mark_refreshed()
             self._set_status(serial, "ok")
