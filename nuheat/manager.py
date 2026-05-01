@@ -510,6 +510,11 @@ class ThermostatManager:
             return
 
         actual = await self._read_for_verify(serial)
+        # Re-check version: a newer write may have arrived during the
+        # upstream read. If so, this verify is stale — its cache replace
+        # would clobber the newer write's optimistic update.
+        if self._versions.get(serial) != version:
+            return
         if actual is not None and self._matches(actual, payload):
             self._cache[serial] = actual
             self._mark_refreshed()
@@ -534,6 +539,9 @@ class ThermostatManager:
             return
 
         actual2 = await self._read_for_verify(serial)
+        # Re-check after the read for the same reason as above.
+        if self._versions.get(serial) != version:
+            return
         if actual2 is not None and self._matches(actual2, payload):
             self._cache[serial] = actual2
             self._mark_refreshed()
