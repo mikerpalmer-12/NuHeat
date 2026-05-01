@@ -2,6 +2,7 @@
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -17,6 +18,23 @@ from nuheat.config import (
     nuheat_to_celsius,
     celsius_to_nuheat,
 )
+
+
+def _format_hold_for_nuheat(value: str) -> str:
+    """Convert an ISO-ish hold timestamp to NuHeat's RFC 1123 GMT format.
+
+    NuHeat's legacy API silently discards `HoldSetPointDateTime` values
+    that aren't in this exact shape, then falls back to mode=Run. Accepts
+    naive ISO (assumed local), ISO with `Z`, or ISO with a `+HH:MM`
+    offset; emits e.g. ``"Fri, 01 May 2026 03:30:00 GMT"``.
+    """
+    iso = value.replace("Z", "+00:00") if value.endswith("Z") else value
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        # Naive: interpret in the container's local timezone (TZ env)
+        dt = dt.astimezone()
+    dt_utc = dt.astimezone(timezone.utc)
+    return dt_utc.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 logger = logging.getLogger(__name__)
 
@@ -218,11 +236,11 @@ class LegacyAPI(NuHeatAPI):
             # NuHeat silently falls back to Run if TEMPORARY_HOLD has no
             # end time, so always include HoldSetPointDateTime alongside it.
             if schedule_mode == ScheduleMode.TEMPORARY_HOLD and hold_until:
-                params["HoldSetPointDateTime"] = hold_until
+                params["HoldSetPointDateTime"] = _format_hold_for_nuheat(hold_until)
         elif temperature_celsius is not None:
             if hold_until:
                 params["ScheduleMode"] = ScheduleMode.TEMPORARY_HOLD
-                params["HoldSetPointDateTime"] = hold_until
+                params["HoldSetPointDateTime"] = _format_hold_for_nuheat(hold_until)
             else:
                 params["ScheduleMode"] = ScheduleMode.HOLD
 
